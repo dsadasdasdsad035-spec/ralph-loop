@@ -1,0 +1,28 @@
+{
+  "name": "ralph",
+  "displayName": "Ralph 自主开发循环",
+  "displayName_i18n": {
+    "en": "Ralph Autonomous Loop",
+    "zh-CN": "Ralph 自主开发循环"
+  },
+  "version": "2.0.1",
+  "description": "Ralph autonomous agent loop for ZCode: generate a PRD, convert it to prd.json user stories, then let each fresh-context iteration implement exactly one story, run the project's checks, commit, and append learnings to progress.txt",
+  "description_i18n": {
+    "en": "Ralph autonomous agent loop for ZCode: generate a PRD, convert it to prd.json user stories, then let each fresh-context iteration implement exactly one story, run the project's checks, commit, and append learnings to progress.txt",
+    "zh-CN": "Ralph 自主开发循环：生成 PRD → 转成 prd.json 用户故事 → 每轮一个新上下文迭代实现一个故事并跑检查、提交、记录经验，直到全部 passes: true"
+  },
+  "author": {
+    "name": "snarktank (upstream), adapted for ZCode"
+  },
+  "keywords": [
+    "ralph",
+    "prd",
+    "autonomous-loop",
+    "agent-loop",
+    "planning",
+    "requirements",
+    "automation"
+  ],
+  "skills": "./skills",
+  "commands": "./commands"
+}
