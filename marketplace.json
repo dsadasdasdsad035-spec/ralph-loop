@@ -1,0 +1,29 @@
+{
+  "name": "ralph-loop",
+  "plugins": [
+    {
+      "name": "ralph",
+      "source": "./",
+      "version": "2.0.1",
+      "description": "Ralph autonomous agent loop for ZCode: generate a PRD, convert it to prd.json user stories, then let each fresh-context iteration implement exactly one story, run the project's checks, commit, and append learnings to progress.txt",
+      "displayName": "Ralph 自主开发循环",
+      "displayName_i18n": {
+        "en": "Ralph Autonomous Loop",
+        "zh-CN": "Ralph 自主开发循环"
+      },
+      "description_i18n": {
+        "en": "Generate a PRD, convert it to prd.json, then run one fresh-context iteration per story until everything passes",
+        "zh-CN": "生成 PRD、转成 prd.json，然后每轮一个新上下文迭代实现一个故事并提交，直到全部通过"
+      },
+      "category": "developer-tools",
+      "keywords": [
+        "ralph",
+        "prd",
+        "autonomous-loop",
+        "agent-loop",
+        "planning",
+        "automation"
+      ]
+    }
+  ]
+}
