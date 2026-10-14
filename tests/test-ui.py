@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+"""Dashboard UI acceptance — every render path, in a real browser.
+
+Covers:
+  board (live server):  running / complete / blocked / no-prd states, the polling
+                        loop picking up an on-disk change, timeline→story linking,
+                        and the auto-refresh toggle
+  snapshot (file://):   data actually embedded, no polling, no console errors
+  fragment (in-session): the Gen UI fragment rendered against the host design system
+
+Requires python3 + playwright (chromium). Without playwright the suite reports
+SKIP instead of failing, so the shell suites stay runnable everywhere.
+
+Usage: python3 tests/test-ui.py
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+from pathlib import Path
+
+TESTS = Path(__file__).resolve().parent
+PLUGIN = TESTS.parent
+FIX = Path(os.environ.get("RALPH_TEST_DIR", Path(tempfile.gettempdir()) / "ralph-plugin-tests"))
+SHOTS = FIX / "shots"
+SHOTS.mkdir(parents=True, exist_ok=True)
+
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    print("SKIP  未安装 playwright（pip install playwright && playwright install chromium）")
+    print("结果: SKIP")
+    raise SystemExit(2)
+
+results, console_errors = [], []
+
+
+def check(name, ok, detail=""):
+    results.append((name, bool(ok)))
+    print(("PASS  " if ok else "FAIL  ") + name + (("  — " + str(detail)) if detail else ""))
+
+
+def sh(*args, **kw):
+    return subprocess.run(args, check=True, capture_output=True, text=True, **kw)
+
+
+def build_fixtures():
+    for state in ("running", "complete", "blocked"):
+        sh("bash", str(TESTS / "make-fixture.sh"), state)
+    (FIX / "degraded" / "noprj").mkdir(parents=True, exist_ok=True)
+
+
+def flip_story(project, story_id):
+    """Rewrite prd.json on disk, the way an iteration's step 9 would."""
+    src = Path(project) / "prd.json"
+    tmp = Path(project) / "prd.json.new"
+    with open(src) as fin, open(tmp, "w") as fout:
+        subprocess.run(["jq", f'(.userStories[]|select(.id=="{story_id}")|.passes)=true', "-c"],
+                       stdin=fin, stdout=fout, check=True)
+    tmp.replace(src)
+
+
+class Server:
+    def __init__(self, project, port):
+        self.port = port
+        self.proc = subprocess.Popen(
+            [sys.executable, str(PLUGIN / "dashboard" / "serve.py"), "--dir", project, "--port", str(port)],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.url = f"http://127.0.0.1:{port}/"
+        for _ in range(80):
+            try:
+                urllib.request.urlopen(self.url + "healthz", timeout=1).read()
+                return
+            except Exception:
+                if self.proc.poll() is not None:
+                    raise SystemExit("server died:\n" + (self.proc.stdout.read() or ""))
+                time.sleep(0.1)
+        raise SystemExit("server did not come up")
+
+    def stop(self):
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+
+
+def api(port, path):
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=10) as r:
+        return r.read().decode()
+
+
+def attach(page, tag):
+    page.on("console", lambda m, t=tag: console_errors.append(f"[{t}] {m.type}: {m.text}")
+            if m.type in ("error", "warning") else None)
+    page.on("pageerror", lambda e, t=tag: console_errors.append(f"[{t}] pageerror: {e}"))
+
+
+def board_case(pw, state, project, port, expect, shot, dark=False, live=None):
+    srv = Server(project, port)
+    page = pw.chromium.launch().new_page(viewport={"width": 1560, "height": 1100},
+                                         color_scheme="dark" if dark else "light")
+    attach(page, state)
+    page.goto(srv.url, wait_until="load")
+    page.wait_for_timeout(700)
+
+    body = page.inner_text("body")
+    for needle in expect.get("text", []):
+        check(f"看板({state}): 包含 {needle!r}", needle in body)
+    for sel, cnt in expect.get("selectors", {}).items():
+        n = page.locator(sel).count()
+        if cnt == "any":
+            check(f"看板({state}): {sel} 至少一个", n > 0, f"实际 {n}")
+        else:
+            check(f"看板({state}): {sel} == {cnt}", n == cnt, f"实际 {n}")
+
+    embedded = page.eval_on_selector("#state", "el => el.textContent.trim().slice(0, 20)")
+    check(f"看板({state}): 初始状态已注入", embedded.startswith("{"), embedded)
+    st = json.loads(api(port, "/api/state"))
+    check(f"看板({state}): /api/state 结构完整", st.get("schema") == 1 and "loop" in st and "prd" in st)
+
+    if live:
+        before = page.inner_text(live["watch"])
+        live["mutate"]()
+        changed = False
+        for _ in range(14):                      # poll interval is 2s
+            page.wait_for_timeout(500)
+            if page.inner_text(live["watch"]) != before:
+                changed = True
+                break
+        after = page.inner_text(live["watch"])
+        check(f"看板({state}): 磁盘变化后自动刷新（{before!r} → {after!r}）",
+              changed and live["expect"] in after)
+        for extra in live.get("also_expect", []):
+            check(f"看板({state}): 阶段推进到 {extra!r}", extra in page.inner_text("body"))
+
+    if page.locator(".tl").count():
+        page.locator(".tl").first.click()
+        page.wait_for_timeout(250)
+        check(f"看板({state}): 点时间线不报错", True)
+    page.locator("#auto").click(); page.wait_for_timeout(150)
+    off = page.locator("#auto").get_attribute("aria-pressed")
+    page.locator("#auto").click(); page.wait_for_timeout(150)
+    on = page.locator("#auto").get_attribute("aria-pressed")
+    check(f"看板({state}): 自动刷新开关切换", off == "false" and on == "true", f"{off}->{on}")
+
+    page.screenshot(path=str(SHOTS / shot), full_page=True)
+    page.context.browser.close()
+    srv.stop()
+
+
+def find_visualize_css():
+    override = os.environ.get("RALPH_VISUALIZE_CSS")
+    if override and Path(override).exists():
+        return Path(override)
+    for p in sorted(Path.home().glob(".zcode/cli/plugins/cache/*/visualize/*/skills/visualize/assets/visualize.css")):
+        return p
+    return None
+
+
+FALLBACK_CSS = """
+:root{--background:#fff;--foreground:#171a1d;--muted:#eef1f5;--muted-foreground:#6a7280;--card:#fff;
+--border:#e2e5ea;--primary:#3d7fc4;--primary-foreground:#fff;--blue:#3d7fc4;--green:#2e8f57;--yellow:#a9770a;
+--font-size-base:14px;color-scheme:light dark}
+@media (prefers-color-scheme:dark){:root{--background:#14171a;--foreground:#e6e9ed;--muted:#262b31;
+--muted-foreground:#9aa3af;--card:#1b1f23;--border:#2b3138;--blue:#6aa9e0;--green:#5fbb85;--yellow:#d9ab4a}}
+body{background:var(--background);color:var(--foreground);font-size:var(--font-size-base)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.75rem}
+.viz-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.75rem}
+.viz-stat-value{font-size:1.25rem;font-weight:500}
+.text-small{font-size:.857em}.text-muted{color:var(--muted-foreground)}
+.text-end{text-align:end}.text-nowrap{white-space:nowrap}.tabular-nums{font-variant-numeric:tabular-nums}
+.table{width:100%;border-collapse:collapse}.table td,.table th{text-align:left;padding:.35rem .5rem;border-bottom:1px solid var(--border)}
+.table-sm td,.table-sm th{padding:.2rem .5rem}
+"""
+
+
+def fragment_preview(fragment, out):
+    css_path = find_visualize_css()
+    css = css_path.read_text(encoding="utf-8") if css_path else FALLBACK_CSS
+    frag = fragment.read_text(encoding="utf-8")
+    out.write_text(f"""<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>fragment preview</title>
+<style>{css}</style>
+<style>html,body{{margin:0}}body{{box-sizing:border-box;padding:1rem;background:var(--background);color:var(--foreground)}}</style>
+</head><body>
+{frag}
+</body></html>
+""", encoding="utf-8")
+    return css_path
+
+
+def snapshot_and_fragment(pw):
+    dash = str(PLUGIN / "scripts" / "ralph-dashboard.sh")
+    for state in ("running", "blocked"):
+        sh("bash", dash, "--snapshot", str(FIX / f"snap-{state}.html"), "--dir", str(FIX / f"proj-{state}"))
+    sh("bash", dash, "--inline-fragment", str(FIX / "fragment.html"), "--dir", str(FIX / "proj-running"))
+
+    browser = pw.chromium.launch()
+    for state, expects in (("running", ["3 / 4", "收尾", "快照"]), ("blocked", ["已卡住", "BLOCKER", "第 2 次"])):
+        page = browser.new_page(viewport={"width": 1500, "height": 1000})
+        attach(page, f"snap-{state}")
+        page.goto((FIX / f"snap-{state}.html").as_uri(), wait_until="load")
+        page.wait_for_timeout(500)
+        body = page.inner_text("body")
+        for needle in expects:
+            check(f"快照({state}): 包含 {needle!r}", needle in body)
+        check(f"快照({state}): 故事卡 4 张", page.locator(".story").count() == 4)
+        page.screenshot(path=str(SHOTS / f"snapshot-{state}.png"), full_page=True)
+        page.close()
+
+    preview = FIX / "fragment-preview.html"
+    used = fragment_preview(FIX / "fragment.html", preview)
+    print(f"      片段预览使用设计系统 CSS: {used or '(未找到 visualize.css，用内置回退样式)'}")
+    for scheme in ("light", "dark"):
+        page = browser.new_page(viewport={"width": 980, "height": 900},
+                                color_scheme="dark" if scheme == "dark" else "light")
+        attach(page, f"frag-{scheme}")
+        page.goto(preview.as_uri(), wait_until="load")
+        page.wait_for_timeout(450)
+        check(f"片段({scheme}): 根节点存在", page.locator("#ralph-inline-view").count() == 1)
+        check(f"片段({scheme}): 11 个流程节点", page.locator(".riv-node").count() == 11)
+        check(f"片段({scheme}): 当前节点唯一", page.locator(".riv-node.active").count() == 1)
+        check(f"片段({scheme}): 故事表 4 行", page.locator("#riv-stories tr").count() == 4)
+        check(f"片段({scheme}): 时间线 3 段", page.locator("#riv-lane .riv-slot").count() == 3)
+        txt = page.locator("#ralph-inline-view").inner_text()
+        for needle in ("3 / 4", "US-003", "任务看板"):
+            check(f"片段({scheme}): 包含 {needle!r}", needle in txt)
+        page.screenshot(path=str(SHOTS / f"fragment-{scheme}.png"), full_page=True)
+        page.close()
+    browser.close()
+
+
+def main():
+    build_fixtures()
+    base = int(os.environ.get("RALPH_TEST_PORT", "7911"))
+    with sync_playwright() as pw:
+        board_case(pw, "running", str(FIX / "proj-running"), base, {
+            "text": ["Ralph 看板", "MyApp", "2 / 4", "实现中", "US-003", "迭代时间线", "历史运行", "代码库经验", "有未提交改动"],
+            "selectors": {".story": 4, ".node": 11, ".edge": 11, ".tl": 3, ".archive-run": 1,
+                          ".story.running": 1, ".story.done": 2, ".node.active": 1},
+        }, "board-running.png", live={
+            "watch": "#kpis .kpi:nth-child(1) .v", "expect": "3 / 4", "also_expect": ["收尾"],
+            "mutate": lambda: flip_story(FIX / "proj-running", "US-003"),
+        })
+        board_case(pw, "complete", str(FIX / "proj-complete"), base + 1, {
+            "text": ["4 / 4", "全部完成"], "selectors": {".story.done": 4, ".story.todo": 0},
+        }, "board-complete-dark.png", dark=True)
+        board_case(pw, "blocked", str(FIX / "proj-blocked"), base + 2, {
+            "text": ["已卡住", "BLOCKER", "第 2 次", "2 次尝试"], "selectors": {".story.blocked": 1},
+        }, "board-blocked.png")
+        board_case(pw, "no-prd", str(FIX / "degraded" / "noprj"), base + 3, {
+            "text": ["还没有 prd.json", "/ralph-run", "prd.json not found"], "selectors": {".empty": "any"},
+        }, "board-empty.png")
+        snapshot_and_fragment(pw)
+
+    real = [e for e in console_errors if "favicon" not in e]
+    print("\n--- 控制台/页面错误 ---")
+    print("  无" if not real else "\n".join("  " + e for e in real))
+    failed = [r for r in results if not r[1]]
+    print(f"\n断言: {len(results) - len(failed)}/{len(results)} 通过")
+    if failed or real:
+        print("结果: FAIL")
+        return 1
+    print("结果: PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

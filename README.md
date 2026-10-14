@@ -82,6 +82,18 @@ bash scripts/ralph.sh --dir . --render-prompt 1  # 只渲染第 1 轮提示词
 旧版本跑出的项目没有事件文件时，会回退为「最新提交 + `prd.json` 状态」的推断，并在页面上标注
 「推断」；子代理执行期间「实现」与「跑检查」无法从磁盘区分，统一记为「实现中」。
 
+## 测试
+
+看板的验收套件在 `tests/`，一条命令重跑（夹具是临时目录里现造的 git 仓库，不碰你的项目）：
+
+```bash
+bash tests/run-all.sh
+```
+
+覆盖状态提取器的正常态与降级输入（缺 PRD / PRD 损坏 / 非 git 仓库 / 空仓库 / 事件文件损坏）、
+无头循环的阶段事件与 `--dashboard` 起停、以及真浏览器里的四状态页面 / 改盘自动刷新 / 快照 /
+会话内片段（明暗两套主题）。依赖与产物位置见 `tests/README.md`。
+
 ## 关键文件
 
 | 文件 | 作用 |
@@ -97,6 +109,7 @@ bash scripts/ralph.sh --dir . --render-prompt 1  # 只渲染第 1 轮提示词
 | `dashboard/index.html` | 看板页面：任务看板 + 流程视图 + 迭代时间线 + 历史运行（无外部依赖、无构建） |
 | `dashboard/serve.py` | 本地只读服务，绑定 127.0.0.1，`/api/state` 每次请求现读磁盘 |
 | `dashboard/inline.html` | 会话内视图的片段模板 |
+| `tests/run-all.sh` | 看板验收套件：状态提取器 / 无头集成 / 真浏览器 UI |
 | `templates/iteration-prompt.md` | 单轮迭代提示词模板（每次迭代注入给子代理/CLI 的全部指令） |
 | `templates/prd.json.example` | `prd.json` 格式示例 |
 
