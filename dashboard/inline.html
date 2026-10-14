@@ -1,0 +1,281 @@
+<div id="ralph-inline-view">
+  <style>
+    #ralph-inline-view .riv-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+    #ralph-inline-view .riv-head .riv-title { font-weight: 500; }
+    #ralph-inline-view .riv-flow { display: block; width: 100%; max-width: 660px; height: auto; }
+    #ralph-inline-view .riv-node-box { fill: var(--background); stroke: var(--border); }
+    #ralph-inline-view .riv-node.done .riv-node-box { fill: var(--green); fill-opacity: .12; stroke: var(--green); }
+    #ralph-inline-view .riv-node.active .riv-node-box { fill: var(--blue); fill-opacity: .16; stroke: var(--blue); stroke-width: 2; }
+    #ralph-inline-view .riv-node.blocked .riv-node-box { fill: var(--yellow); fill-opacity: .18; stroke: var(--yellow); stroke-width: 2; }
+    #ralph-inline-view .riv-node .riv-t { fill: var(--foreground); font-size: 12px; }
+    #ralph-inline-view .riv-node.future .riv-t { fill: var(--muted-foreground); }
+    #ralph-inline-view .riv-edge { stroke: var(--border); stroke-width: 1.4; fill: none; }
+    #ralph-inline-view .riv-edge.lit { stroke: var(--blue); stroke-width: 1.8; }
+    #ralph-inline-view .riv-edge.done { stroke: var(--green); stroke-width: 1.8; }
+    #ralph-inline-view .riv-edge.blocked { stroke: var(--yellow); stroke-width: 1.8; }
+    #ralph-inline-view .riv-elabel { fill: var(--muted-foreground); font-size: 12px; }
+    #ralph-inline-view .riv-token-box { fill: var(--blue); }
+    #ralph-inline-view .riv-token.blocked .riv-token-box { fill: var(--yellow); }
+    #ralph-inline-view .riv-token.done .riv-token-box { fill: var(--green); }
+    #ralph-inline-view .riv-token text { fill: var(--primary-foreground); font-size: 12px; }
+    #ralph-inline-view .riv-lane-head { margin-top: 10px; }
+    #ralph-inline-view .riv-lane { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+    #ralph-inline-view .riv-lane .riv-slot { height: 14px; min-width: 20px; border-radius: 3px; background: var(--muted); flex: 1 1 auto; }
+    #ralph-inline-view .riv-lane .riv-slot.done { background: var(--green); }
+    #ralph-inline-view .riv-lane .riv-slot.blocked { background: var(--yellow); }
+    #ralph-inline-view .riv-lane .riv-slot.running { background: var(--blue); }
+    #ralph-inline-view .riv-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: middle; }
+    #ralph-inline-view .riv-dot.done { background: var(--green); }
+    #ralph-inline-view .riv-dot.running { background: var(--blue); }
+    #ralph-inline-view .riv-dot.blocked { background: var(--yellow); }
+    #ralph-inline-view .riv-dot.todo { background: var(--border); }
+    #ralph-inline-view .riv-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  </style>
+
+  <div class="riv-head">
+    <span class="riv-title" id="riv-title">Ralph</span>
+    <span class="text-small text-muted" id="riv-branch"></span>
+    <span class="text-small text-muted" id="riv-stage"></span>
+  </div>
+
+  <div class="viz-grid">
+    <div class="card viz-stat">
+      <div class="text-small text-muted">进度</div>
+      <div class="viz-stat-value tabular-nums" id="riv-done">—</div>
+      <div class="text-small text-muted" id="riv-remaining"></div>
+    </div>
+    <div class="card viz-stat">
+      <div class="text-small text-muted">当前</div>
+      <div class="viz-stat-value" id="riv-current">—</div>
+      <div class="text-small text-muted" id="riv-current-sub"></div>
+    </div>
+    <div class="card viz-stat">
+      <div class="text-small text-muted">迭代</div>
+      <div class="viz-stat-value tabular-nums" id="riv-iter">—</div>
+      <div class="text-small text-muted" id="riv-iter-sub"></div>
+    </div>
+  </div>
+
+  <h3 class="riv-sr-only" id="riv-flow-heading">循环流程与当前阶段</h3>
+  <svg class="riv-flow" id="riv-flow" viewBox="0 0 640 404" role="img" aria-labelledby="riv-flow-heading" preserveAspectRatio="xMidYMid meet"></svg>
+
+  <div class="text-small text-muted riv-lane-head" id="riv-lane-head"></div>
+  <div class="riv-lane" id="riv-lane" role="img" aria-label="迭代时间线"></div>
+
+  <div class="text-small text-muted">任务看板</div>
+  <table class="table table-sm">
+    <thead>
+      <tr><th scope="col">故事</th><th scope="col">标题</th><th scope="col" class="text-end">状态</th></tr>
+    </thead>
+    <tbody id="riv-stories"></tbody>
+  </table>
+
+  <script id="ralph-inline-state" type="application/json">
+__RALPH_STATE__
+  </script>
+
+  <script>
+  (function () {
+    'use strict';
+    var root = document.getElementById('ralph-inline-view');
+    if (!root) return;
+
+    var stateEl = document.getElementById('ralph-inline-state');
+    if (!stateEl) return;
+    var state;
+    try { state = JSON.parse(stateEl.textContent); } catch (e) { return; }
+    if (!state) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    function tag(name, attrs) {
+      var el = document.createElementNS(NS, name);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      return el;
+    }
+    function text(str) { return document.createTextNode(str == null ? '' : String(str)); }
+
+    // Setup runs down the left; the loop sits on the right with its return edge
+    // sweeping around the outside, so no boxes or edges overlap.
+    var BOX_W = 120, BOX_H = 30;
+    var NODES = [
+      { n: 1,  label: '写 PRD',      x: 75,  y: 34 },
+      { n: 2,  label: 'prd.json',    x: 75,  y: 98 },
+      { n: 3,  label: '启动循环',    x: 75,  y: 162 },
+      { n: 4,  label: '挑故事',      x: 230, y: 182 },
+      { n: 5,  label: '实现',        x: 310, y: 112 },
+      { n: 6,  label: '跑检查',      x: 470, y: 112 },
+      { n: 7,  label: '提交',        x: 550, y: 182 },
+      { n: 8,  label: '更新 prd',    x: 470, y: 252 },
+      { n: 9,  label: '写 progress', x: 310, y: 252 },
+      { n: 10, label: '还有故事?',   x: 390, y: 322 },
+      { n: 11, label: '完成',        x: 390, y: 384 }
+    ];
+    var EDGES = [
+      { f: 1, t: 2, ord: 2 }, { f: 2, t: 3, ord: 3 },
+      { f: 3, t: 4, ord: 4, d: 'M135,158 L173,172' },
+      { f: 4, t: 5, ord: 5 }, { f: 5, t: 6, ord: 6 }, { f: 6, t: 7, ord: 7 },
+      { f: 7, t: 8, ord: 8 }, { f: 8, t: 9, ord: 9 }, { f: 9, t: 10, ord: 10 },
+      { f: 10, t: 4, ord: 10, yes: true, label: '是',
+        d: 'M330,322 C150,322 45,300 45,230 C45,196 110,182 170,182' },
+      { f: 10, t: 11, ord: 11, label: '否', d: 'M390,337 L390,369' }
+    ];
+    var byN = {};
+    NODES.forEach(function (n) { byN[n.n] = n; });
+
+    function box(n) { return { x: byN[n].x - BOX_W / 2, y: byN[n].y - BOX_H / 2 }; }
+    function trim(ax, ay, bx, by) {
+      var dx = bx - ax, dy = by - ay;
+      var tx = dx === 0 ? Infinity : (BOX_W / 2 + 5) / Math.abs(dx);
+      var ty = dy === 0 ? Infinity : (BOX_H / 2 + 5) / Math.abs(dy);
+      var t = Math.min(tx, ty);
+      return { x1: ax + dx * t, y1: ay + dy * t, x2: bx - dx * t, y2: by - dy * t };
+    }
+
+    var loop = state.loop || {};
+    var stage = loop.stage || 'no-prd';
+    var activeNode = loop.stage_node || 1;
+    var lim = { 'no-prd': 1, implement: 5, 'update-prd': 8, blocked: 5, idle: 4, between: 10, done: 11 }[stage];
+    if (lim == null) lim = 1;
+    var prevLap = (loop.iteration || 0) >= 2 || stage === 'between' || stage === 'done';
+
+    /* ---------- flow ---------- */
+    var svg = document.getElementById('riv-flow');
+    EDGES.forEach(function (e) {
+      var a = byN[e.f], b = byN[e.t], d;
+      if (e.d) { d = e.d; } else { var t = trim(a.x, a.y, b.x, b.y); d = 'M' + t.x1 + ',' + t.y1 + ' L' + t.x2 + ',' + t.y2; }
+      var lit = e.yes ? prevLap : (e.ord <= lim);
+      var cls = 'riv-edge';
+      if (lit) cls += (stage === 'done' && e.ord === 11) ? ' done' : (stage === 'blocked' ? ' blocked' : ' lit');
+      svg.appendChild(tag('path', { d: d, class: cls }));
+      if (e.label) {
+        var lb = tag('text', { x: e.yes ? 60 : 406, y: e.yes ? 300 : 352, 'text-anchor': 'middle', class: 'riv-elabel' });
+        lb.appendChild(text(e.label));
+        svg.appendChild(lb);
+      }
+    });
+    NODES.forEach(function (n) {
+      var b = box(n.n);
+      var cls = 'riv-node';
+      if (stage === 'blocked' && n.n === activeNode) cls += ' blocked';
+      else if (n.n === activeNode) cls += ' active';
+      else if (n.n < activeNode || (stage === 'done' && n.n === 11)) cls += ' done';
+      else cls += ' future';
+      var g = tag('g', { class: cls });
+      g.appendChild(tag('rect', { x: b.x, y: b.y, width: BOX_W, height: BOX_H, rx: 7, class: 'riv-node-box' }));
+      var t = tag('text', { x: n.x, y: n.y + 4, 'text-anchor': 'middle', class: 'riv-t' });
+      t.appendChild(text(n.label));
+      g.appendChild(t);
+      svg.appendChild(g);
+    });
+    var tokenLabel = loop.story || (stage === 'done' ? '完成' : '');
+    if (tokenLabel) {
+      var w = Math.max(38, tokenLabel.length * 7.5 + 14);
+      var target = byN[activeNode] || byN[1];
+      var g2 = tag('g', { class: 'riv-token' + (stage === 'blocked' ? ' blocked' : stage === 'done' ? ' done' : ''),
+                          transform: 'translate(' + (target.x - w / 2) + ',' + (target.y - BOX_H / 2 - 18) + ')' });
+      g2.appendChild(tag('rect', { width: w, height: 16, rx: 8, class: 'riv-token-box' }));
+      var tt = tag('text', { x: w / 2, y: 12, 'text-anchor': 'middle' });
+      tt.appendChild(text(tokenLabel));
+      g2.appendChild(tt);
+      svg.appendChild(g2);
+    }
+
+    /* ---------- header + stats ---------- */
+    var prd = state.prd;
+    document.getElementById('riv-title').textContent =
+      'Ralph' + (prd && (prd.project || prd.description) ? ' · ' + (prd.project || prd.description) : '');
+    document.getElementById('riv-branch').textContent = state.project && state.project.branch ? state.project.branch : '';
+    document.getElementById('riv-stage').textContent = loop.stage_label || '';
+
+    if (prd) {
+      document.getElementById('riv-done').textContent = prd.counts.done + ' / ' + prd.counts.total;
+      document.getElementById('riv-remaining').textContent =
+        prd.counts.remaining > 0 ? '还剩 ' + prd.counts.remaining + ' 个故事' : '全部完成';
+    } else {
+      document.getElementById('riv-done').textContent = '—';
+      document.getElementById('riv-remaining').textContent = '还没有 prd.json';
+    }
+    var current = loop.story || (prd && prd.next) || '—';
+    document.getElementById('riv-current').textContent = current;
+    var titleOf = {};
+    if (prd) { prd.stories.forEach(function (s) { titleOf[s.id] = s.title; }); }
+    document.getElementById('riv-current-sub').textContent = titleOf[current] || (loop.stage_label || '');
+    document.getElementById('riv-iter').textContent = loop.iteration ? String(loop.iteration) : '—';
+    var sub = [];
+    if (loop.max_iterations) sub.push('最多 ' + loop.max_iterations);
+    if (loop.running) sub.push('运行中');
+    else if (loop.last_event_age_sec != null) sub.push('最近活动 ' + Math.round(loop.last_event_age_sec / 60) + ' 分钟前');
+    document.getElementById('riv-iter-sub').textContent = sub.join(' · ');
+
+    /* ---------- timeline lane ---------- */
+    var lane = document.getElementById('riv-lane');
+    var laneHead = document.getElementById('riv-lane-head');
+    var its = state.iterations || [];
+    if (!its.length) {
+      laneHead.textContent = '迭代时间线';
+      lane.className = 'text-small text-muted';
+      lane.textContent = '还没有迭代记录';
+    } else {
+      laneHead.textContent = '迭代时间线 · 共 ' + its.length + ' 轮';
+      var maxSpan = 0;
+      its.forEach(function (it) {
+        var span = (it.ended_epoch || state.now_epoch) - (it.started_epoch || state.now_epoch);
+        if (span > maxSpan) maxSpan = span;
+      });
+      its.forEach(function (it) {
+        var span = (it.ended_epoch || state.now_epoch) - (it.started_epoch || state.now_epoch);
+        var cls = it.status === 'done' ? 'done' : it.status === 'blocked' ? 'blocked' : (it.ended ? '' : 'running');
+        var slot = document.createElement('div');
+        slot.className = 'riv-slot ' + cls;
+        slot.style.flexGrow = String(Math.max(1, Math.round((span / (maxSpan || 1)) * 10)));
+        slot.setAttribute('data-tooltip', '第 ' + it.n + ' 轮 · ' + (it.story || '—') + ' · ' +
+          (it.ended ? '已完成' : '进行中'));
+        lane.appendChild(slot);
+      });
+      var summary = document.createElement('span');
+      summary.className = 'riv-sr-only';
+      summary.textContent = '共 ' + its.length + ' 轮迭代：' + its.map(function (it) {
+        return '第 ' + it.n + ' 轮 ' + (it.story || '无故事') +
+          (it.status === 'blocked' ? ' 卡住' : it.ended ? ' 已完成' : ' 进行中');
+      }).join('；');
+      lane.appendChild(summary);
+    }
+
+    /* ---------- stories ---------- */
+    var body = document.getElementById('riv-stories');
+    if (!prd || !prd.stories.length) {
+      var tr0 = document.createElement('tr');
+      var td0 = document.createElement('td');
+      td0.colSpan = 3;
+      td0.className = 'text-small text-muted';
+      td0.textContent = 'prd.json 里还没有用户故事';
+      tr0.appendChild(td0);
+      body.appendChild(tr0);
+    } else {
+      prd.stories.forEach(function (s) {
+        var status, tone;
+        if (s.passes) { status = '已完成'; tone = 'done'; }
+        else if (loop.story === s.id && stage === 'blocked') { status = '已卡住'; tone = 'blocked'; }
+        else if (loop.story === s.id) { status = '进行中'; tone = 'running'; }
+        else { status = '待办'; tone = 'todo'; }
+        var tr = document.createElement('tr');
+        var tdId = document.createElement('td');
+        tdId.className = 'text-nowrap';
+        var code = document.createElement('code');
+        code.appendChild(text(s.id));
+        tdId.appendChild(code);
+        var tdTitle = document.createElement('td');
+        tdTitle.appendChild(text(s.title));
+        var tdSt = document.createElement('td');
+        tdSt.className = 'text-end text-nowrap';
+        var dot = document.createElement('span');
+        dot.className = 'riv-dot ' + tone;
+        tdSt.appendChild(dot);
+        tdSt.appendChild(text(' ' + status));
+        tr.appendChild(tdId); tr.appendChild(tdTitle); tr.appendChild(tdSt);
+        body.appendChild(tr);
+      });
+    }
+  })();
+  </script>
+</div>

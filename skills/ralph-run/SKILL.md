@@ -27,6 +27,16 @@ user the plugin installation looks incomplete instead of improvising a replaceme
 
 `ralph.sh` owns every piece of loop state, so you never hand-edit `progress.txt` or parse JSON yourself.
 
+Two sibling scripts sit next to it, both optional and best-effort:
+
+- `scripts/ralph-event.sh` — appends one stage event to `<PROJECT_DIR>/.ralph/events.jsonl`. The
+  dashboard reads that file to show *which* iteration is running on *which* story instead of
+  guessing from commits. Call it around every subagent (1b/1c) and when the loop ends (Step 2/3).
+  If the helper is missing, skip it silently: an older install still runs, it just loses precision.
+- `scripts/ralph-dashboard.sh` — the read-only board (`--dir`, `--port`, `--stop`, `--snapshot FILE`,
+  `--inline-fragment FILE`, `--once`). Start it **only when the user asked** for the dashboard or a
+  live view; with it running, the loop is observable while it works.
+
 Run the preflight (replace `<PROJECT_DIR>` with the project root — the directory holding `.git`,
 usually the current workspace; also pass `--max-iterations` if the user named a number):
 
@@ -53,6 +63,14 @@ Repeat, up to `max-iterations` times (default 10, or what the user asked for):
 
 ```bash
 bash "<plugin-root>/scripts/ralph.sh" --dir "<PROJECT_DIR>" --render-prompt <N>
+```
+
+**Record the iteration start** (best-effort — this is what lets a running dashboard say "第 N 轮正在
+处理 US-00X" as a fact rather than a guess):
+
+```bash
+bash "<plugin-root>/scripts/ralph-event.sh" --dir "<PROJECT_DIR>" --type iteration_start \
+  --iteration <N> --story <STORY_ID> --max <MAX> --driver in-session
 ```
 
 **1b. Spawn exactly one fresh subagent** with that prompt as its task. Use the `Agent` tool with
@@ -82,6 +100,14 @@ token even though the story landed correctly; conversely a subagent can claim su
 | `remaining` unchanged | The story did not land. Check the subagent's report and `progress.txt`: if it describes a real blocker, stop the loop and surface it (Step 3). If not, allow **one** retry of the same story — a second consecutive no-progress iteration ends the loop. |
 | The `next` story id changed but `remaining` did not | A different story got taken; almost always means the previous story was left `passes: false` deliberately. Treat as no progress. |
 
+**Record the outcome** right after deciding, with the same helper — `done` when `remaining`
+decreased, `blocked` when it did not:
+
+```bash
+bash "<plugin-root>/scripts/ralph-event.sh" --dir "<PROJECT_DIR>" --type iteration_end \
+  --iteration <N> --story <STORY_ID> --status <done|blocked> --driver in-session
+```
+
 **1d. Between iterations** there is nothing to clean up: each iteration is a separate agent whose
 context dies with it. Memory between iterations is exactly git history, `prd.json`, and
 `progress.txt` — which is why the subagent is told to commit and to append learnings.
@@ -91,6 +117,13 @@ iterations of the same story with no commit means the story is too big or the en
 Loops that keep retrying a stuck story burn the user's budget for nothing.
 
 ## Step 2: Report completion
+
+First close the run in the event log:
+
+```bash
+bash "<plugin-root>/scripts/ralph-event.sh" --dir "<PROJECT_DIR>" --type complete \
+  --iteration <N> --status done --driver in-session
+```
 
 Completion is decided by `remaining == 0`, and at that point you print the completion signal the
 user's tooling expects, on its own line:
@@ -109,10 +142,20 @@ commits produced (`git log --oneline` on that branch). If any story was marked `
 the subagent reported it could not verify something (no browser capability, skipped tests), say so
 explicitly instead of repeating "all stories pass" as if it were fully verified.
 
+If the user was watching the live board, the page already shows this state; mention that it is
+current rather than repeating every number from it.
+
 ## Step 3: Report a blocked loop
 
 If the loop ends without completing — max iterations reached, or a repeated no-progress story —
-report and stop:
+close the run in the event log the same way, with `blocked`:
+
+```bash
+bash "<plugin-root>/scripts/ralph-event.sh" --dir "<PROJECT_DIR>" --type stopped \
+  --iteration <N> --story <STUCK_STORY_ID> --status blocked --driver in-session
+```
+
+Then report and stop:
 
 - Which story is stuck (`next`), how many iterations it consumed, and what the iterations reported
 - What `progress.txt` says the blocker is
@@ -128,6 +171,8 @@ green. A blocked story left at `passes: false` is the correct end state.
 - The subagent owns: the implementation, the project's checks, the commit, `passes: true`, and the
   `progress.txt` entry.
 - The script owns: archiving, progress initialisation, prompt rendering, and state reporting.
+- You own the event log: one `iteration_start` / `iteration_end` per iteration, then `complete` or
+  `stopped`. It is best-effort; a failed write must never abort an iteration.
 - Completion is `remaining == 0` read from the script — not the subagent's prose, not the token.
 - `.ralph/` holds harness state and self-ignores via a generated `.gitignore`, so a story's
   `git add -A` cannot commit it. `prd.json` and `progress.txt` *are* meant to be committed — they

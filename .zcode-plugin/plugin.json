@@ -5,23 +5,25 @@
     "en": "Ralph Autonomous Loop",
     "zh-CN": "Ralph 自主开发循环"
   },
-  "version": "2.0.1",
-  "description": "Ralph autonomous agent loop for ZCode: generate a PRD, convert it to prd.json user stories, then let each fresh-context iteration implement exactly one story, run the project's checks, commit, and append learnings to progress.txt",
+  "version": "2.1.0",
+  "description": "Ralph autonomous agent loop for ZCode: generate a PRD, convert it to prd.json user stories, then let each fresh-context iteration implement exactly one story, run the project's checks, commit, and append learnings to progress.txt — with a read-only local dashboard for story status and live loop progress",
   "description_i18n": {
-    "en": "Ralph autonomous agent loop for ZCode: generate a PRD, convert it to prd.json user stories, then let each fresh-context iteration implement exactly one story, run the project's checks, commit, and append learnings to progress.txt",
-    "zh-CN": "Ralph 自主开发循环：生成 PRD → 转成 prd.json 用户故事 → 每轮一个新上下文迭代实现一个故事并跑检查、提交、记录经验，直到全部 passes: true"
+    "en": "Ralph autonomous agent loop for ZCode: generate a PRD, convert it to prd.json user stories, then let each fresh-context iteration implement exactly one story, run the project's checks, commit, and append learnings to progress.txt — with a read-only local dashboard for story status and live loop progress",
+    "zh-CN": "Ralph 自主开发循环：生成 PRD → 转成 prd.json 用户故事 → 每轮一个新上下文迭代实现一个故事并跑检查、提交、记录经验，直到全部 passes: true；附只读看板，可看故事状态与循环实时进度"
   },
   "author": {
     "name": "snarktank (upstream), adapted for ZCode"
   },
   "keywords": [
-    "ralph",
-    "prd",
-    "autonomous-loop",
     "agent-loop",
+    "automation",
+    "autonomous-loop",
+    "dashboard",
+    "monitoring",
     "planning",
-    "requirements",
-    "automation"
+    "prd",
+    "ralph",
+    "requirements"
   ],
   "skills": "./skills",
   "commands": "./commands"

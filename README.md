@@ -22,6 +22,8 @@ ZCode 移植版 Ralph —— 自主 AI 编码循环。每一轮迭代都是**全
   （`{{PROJECT_DIR}}` 等占位符），改一处即可，不会两份漂移。
 - `dev-browser` 技能替换为 ZCode 的浏览器能力 `browser-use:web-gui-tester` / `browser-use:control-browser`。
 - 上游的 `CLAUDE.md` 更新约定改为 `AGENTS.md`（ZCode 自动读取的指令文件）。
+- 上游的 `flowchart/` 是一个静态的讲义式流程图站点；本插件改为**由项目真实产物驱动的只读看板**
+  （`/ralph-dashboard`）：任务状态、当前阶段、迭代时间线都来自磁盘上的文件，不靠示例数据摆样子。
 
 ## 安装
 
@@ -45,9 +47,40 @@ ZCode 移植版 Ralph —— 自主 AI 编码循环。每一轮迭代都是**全
 ```bash
 bash scripts/ralph.sh --dir /path/to/project --tool claude 10
 bash scripts/ralph.sh --dir . --tool custom --cmd "my-agent --auto" 10
+bash scripts/ralph.sh --dir . --dashboard            # 跑循环的同时起看板并打印 URL
 bash scripts/ralph.sh --dir . --prepare-only     # 只做 preflight，输出状态 JSON
 bash scripts/ralph.sh --dir . --render-prompt 1  # 只渲染第 1 轮提示词
 ```
+
+## 看板（只读管理员页面）
+
+`/ralph-dashboard` 打开一个本地页面，看 `prd.json` 的任务情况和循环的实时流程。
+它**只读**：全部数据来自 `prd.json`、`progress.txt`、git 历史、`.ralph/events.jsonl` 与
+`archive/`，读不到的东西会明确报缺，绝不编造进度。
+
+三种用法：
+
+| 方式 | 命令 | 说明 |
+|---|---|---|
+| 实时看板（推荐） | `/ralph-dashboard` 或 `scripts/ralph-dashboard.sh --dir <项目>` | 起一个只监听 127.0.0.1 的小服务并打印 URL；页面每 2 秒重读磁盘，循环跑着时是活的。`--stop` 停止 |
+| 静态快照 | `scripts/ralph-dashboard.sh --snapshot out.html --dir <项目>` | 生成自包含单文件（数据内嵌），双击打开；不会自动更新 |
+| 会话内视图 | `/ralph-dashboard 会话内` | 在 ZCode Desktop 里把看板直接渲染进对话（静态快照） |
+
+无头跑循环时加 `--dashboard` 即可边跑边看，退出时服务随之停止。
+
+页面内容：
+
+- **任务看板** — 每个故事的状态（已完成 / 进行中 / 待办 / 已卡住）、优先级、验收标准、
+  关联提交（含文件级增删行）、`progress.txt` 里的每一次尝试记录（含卡住的诊断）。
+- **流程视图** — 写 PRD → 转 `prd.json` → 启动循环 → 挑故事 → 实现 → 跑检查 → 提交 →
+  更新 `prd.json` → 写 `progress.txt` → 还有故事？的回环图；走过的路径点亮，当前阶段脉冲，
+  故事令牌停在当前节点。
+- **迭代时间线** — 每一轮的耗时与结果（绿=完成、琥珀=卡住、蓝=进行中），点一下跳到对应的故事卡。
+- **代码库经验 / 历史运行** — `progress.txt` 的 `Codebase Patterns` 汇总，以及 `archive/` 里往次运行的完成度。
+
+准确性说明：阶段以 `.ralph/events.jsonl` 的事件为准（`ralph-run` 技能与 `ralph.sh` 都会写）。
+旧版本跑出的项目没有事件文件时，会回退为「最新提交 + `prd.json` 状态」的推断，并在页面上标注
+「推断」；子代理执行期间「实现」与「跑检查」无法从磁盘区分，统一记为「实现中」。
 
 ## 关键文件
 
@@ -55,8 +88,15 @@ bash scripts/ralph.sh --dir . --render-prompt 1  # 只渲染第 1 轮提示词
 |---|---|
 | `skills/prd/SKILL.md` | 生成 PRD（含澄清问题、可验证验收标准） |
 | `skills/ralph/SKILL.md` | PRD → `prd.json`，故事拆分与依赖排序规则 |
-| `skills/ralph-run/SKILL.md` | 会话内循环编排：每轮一个全新上下文子代理 |
-| `scripts/ralph.sh` | 循环状态机：归档、进度初始化、提示词渲染、无头循环 |
+| `skills/ralph-run/SKILL.md` | 会话内循环编排：每轮一个全新上下文子代理，并写入阶段事件 |
+| `skills/ralph-dashboard/SKILL.md` | 看板：起服务 / 导出快照 / 会话内渲染 |
+| `scripts/ralph.sh` | 循环状态机：归档、进度初始化、提示词渲染、无头循环（`--dashboard` 可同时起看板） |
+| `scripts/ralph-state.sh` | 只读状态聚合：prd / progress / git / events / archive → 一份 JSON |
+| `scripts/ralph-dashboard.sh` | 看板入口：`--dir --port`（服务）、`--snapshot`、`--inline-fragment`、`--once`、`--stop` |
+| `scripts/ralph-event.sh` | 向 `.ralph/events.jsonl` 追加上一条阶段事件 |
+| `dashboard/index.html` | 看板页面：任务看板 + 流程视图 + 迭代时间线 + 历史运行（无外部依赖、无构建） |
+| `dashboard/serve.py` | 本地只读服务，绑定 127.0.0.1，`/api/state` 每次请求现读磁盘 |
+| `dashboard/inline.html` | 会话内视图的片段模板 |
 | `templates/iteration-prompt.md` | 单轮迭代提示词模板（每次迭代注入给子代理/CLI 的全部指令） |
 | `templates/prd.json.example` | `prd.json` 格式示例 |
 

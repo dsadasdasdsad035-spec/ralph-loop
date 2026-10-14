@@ -12,6 +12,8 @@
 #   --prd FILE           PRD path (default: <dir>/prd.json)
 #   --progress FILE      Progress log path (default: <dir>/progress.txt)
 #   --max-iterations N   Maximum iterations (default: 10)
+#   --dashboard          Start the local read-only dashboard and print its URL
+#   --port N             Dashboard port (default: 7878; auto-increments if busy)
 #   --prepare-only       Do the preflight/archive/progress setup, print state as JSON, exit
 #   --render-prompt N    Print the iteration prompt for iteration N, exit (no agent is spawned)
 #
@@ -33,6 +35,9 @@ PROGRESS_FILE=""
 MAX_ITERATIONS=10
 PREPARE_ONLY=false
 RENDER_PROMPT=""
+DASHBOARD=false
+DASHBOARD_PORT=7878
+DASHBOARD_PID=""
 
 die() { echo "Error: $*" >&2; exit 1; }
 
@@ -52,10 +57,13 @@ while [[ $# -gt 0 ]]; do
     --progress=*) PROGRESS_FILE="${1#*=}"; shift ;;
     --max-iterations) MAX_ITERATIONS="${2:-}"; shift 2 ;;
     --max-iterations=*) MAX_ITERATIONS="${1#*=}"; shift ;;
+    --dashboard) DASHBOARD=true; shift ;;
+    --port) DASHBOARD_PORT="${2:-}"; shift 2 ;;
+    --port=*) DASHBOARD_PORT="${1#*=}"; shift ;;
     --prepare-only) PREPARE_ONLY=true; shift ;;
     --render-prompt) RENDER_PROMPT="${2:-}"; shift 2 ;;
     --render-prompt=*) RENDER_PROMPT="${1#*=}"; shift ;;
-    -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)
       if [[ "$1" =~ ^[0-9]+$ ]]; then
         MAX_ITERATIONS="$1"
@@ -89,6 +97,35 @@ jq -e '.userStories | type == "array"' "$PRD_FILE" >/dev/null 2>&1 \
 # directory so a story's `git add -A` cannot sweep it into a commit.
 mkdir -p "$STATE_DIR"
 [[ -f "$STATE_DIR/.gitignore" ]] || printf '*\n' > "$STATE_DIR/.gitignore"
+
+# --- dashboard hooks ---------------------------------------------------------------
+
+EVENT_HELPER="$SCRIPT_DIR/ralph-event.sh"
+
+# Stage events feed the dashboard's "what is happening right now" view. Best-effort on
+# purpose: a missing helper or a failed write must never abort an iteration.
+write_event() {
+  [[ -f "$EVENT_HELPER" ]] || return 0
+  bash "$EVENT_HELPER" --dir "$PROJECT_DIR" --driver headless "$@" || true
+}
+
+start_dashboard() {
+  local launcher="$SCRIPT_DIR/ralph-dashboard.sh"
+  [[ -f "$launcher" ]] || { echo "Note: dashboard launcher not found ($launcher)" >&2; return 0; }
+  bash "$launcher" --dir "$PROJECT_DIR" --port "$DASHBOARD_PORT" &
+  DASHBOARD_PID=$!
+  sleep 1
+}
+
+stop_dashboard() {
+  [[ -n "$DASHBOARD_PID" ]] || return 0
+  kill "$DASHBOARD_PID" 2>/dev/null || true
+  local srv
+  srv="$(cat "$STATE_DIR/dashboard.pid" 2>/dev/null || true)"
+  if [[ -n "$srv" ]]; then kill "$srv" 2>/dev/null || true; fi
+  rm -f "$STATE_DIR/dashboard.pid"
+  DASHBOARD_PID=""
+}
 
 # --- state helpers -----------------------------------------------------------------
 
@@ -205,6 +242,13 @@ run_agent() {
 echo "Starting Ralph — tool: $TOOL_LABEL — project: $PROJECT_DIR"
 echo "Branch: $CURRENT_BRANCH — stories remaining: $REMAINING/$((REMAINING + $(jq '[.userStories[] | select(.passes == true)] | length' "$PRD_FILE"))) — max iterations: $MAX_ITERATIONS"
 
+if [[ "$DASHBOARD" == true ]]; then
+  start_dashboard
+  trap 'stop_dashboard' EXIT INT TERM
+fi
+
+write_event --type preflight --iteration 0 --max "$MAX_ITERATIONS"
+
 for i in $(seq 1 "$MAX_ITERATIONS"); do
   echo ""
   echo "==============================================================="
@@ -214,18 +258,30 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
   PROMPT_FILE="$STATE_DIR/iteration-$i-prompt.md"
   render_prompt "$i" > "$PROMPT_FILE"
 
+  STORY_BEFORE="$(prd_next)"
+  REMAINING_BEFORE="$(prd_remaining)"
+  write_event --type iteration_start --iteration "$i" --story "$STORY_BEFORE" --max "$MAX_ITERATIONS"
+
   OUTPUT="$(run_agent "$PROMPT_FILE")"
 
+  REMAINING="$(prd_remaining)"
+  NEXT_STORY="$(prd_next)"
+  # A story landed only if the remaining count actually dropped — the agent's own
+  # report and the completion token are both unreliable (see ralph-run's contract).
+  if [[ "$REMAINING" -lt "$REMAINING_BEFORE" ]]; then ITER_STATUS="done"; else ITER_STATUS="blocked"; fi
+  write_event --type iteration_end --iteration "$i" --story "$STORY_BEFORE" --status "$ITER_STATUS"
+
   if echo "$OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
+    write_event --type complete --iteration "$i" --status done
     echo ""
     echo "Ralph completed all tasks!"
     echo "Completed at iteration $i of $MAX_ITERATIONS"
     exit 0
   fi
 
-  REMAINING="$(prd_remaining)"
   echo "Iteration $i complete. Stories remaining: $REMAINING"
   if [[ "$REMAINING" -eq 0 ]]; then
+    write_event --type complete --iteration "$i" --status done
     echo "Ralph completed all tasks (all stories have passes: true)."
     exit 0
   fi
@@ -233,6 +289,11 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
   sleep 2
 done
 
+# Max iterations reached. The stop itself is not a failure of the last iteration, so
+# report `blocked` only when that iteration genuinely made no progress.
+STOP_STATUS="none"
+if [[ "$ITER_STATUS" == "blocked" ]]; then STOP_STATUS="blocked"; fi
+write_event --type stopped --iteration "$MAX_ITERATIONS" --story "$NEXT_STORY" --status "$STOP_STATUS"
 echo ""
 echo "Ralph reached max iterations ($MAX_ITERATIONS) without completing all tasks."
 echo "Check $PROGRESS_FILE for status."

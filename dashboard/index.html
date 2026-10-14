@@ -1,0 +1,799 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ralph 看板</title>
+<!--
+  Ralph dashboard — the admin page for a running (or finished) Ralph loop.
+
+  Read-only. Every value comes from a state document produced by
+  scripts/ralph-state.sh, which reads prd.json / progress.txt / git / .ralph/events.jsonl.
+  Served live by dashboard/serve.py (polls /api/state), or rendered as a
+  self-contained snapshot with data embedded in the #state script tag.
+
+  No external resources: no CDN, no fonts, no build step. Works offline from file://.
+-->
+<style>
+  :root {
+    --bg: #f5f6f8; --fg: #171a1d; --muted: #6a7280; --faint: #8b939f;
+    --card: #ffffff; --border: #e2e5ea; --border-strong: #c9cfd8;
+    --chip-bg: #eef1f5;
+    --blue: #3d7fc4; --blue-bg: #eaf3fc;
+    --green: #2e8f57; --green-bg: #e9f6ee;
+    --amber: #a9770a; --amber-bg: #fdf4dd;
+    --red: #bb3a2b; --red-bg: #fdecea;
+    --steel: #5c6875; --steel-bg: #f0f2f5;
+    --shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 1px 3px rgba(16, 24, 40, .06);
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+            "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171a; --fg: #e6e9ed; --muted: #9aa3af; --faint: #78818d;
+      --card: #1b1f23; --border: #2b3138; --border-strong: #3a424b;
+      --chip-bg: #262b31;
+      --blue: #6aa9e0; --blue-bg: #172533;
+      --green: #5fbb85; --green-bg: #14261c;
+      --amber: #d9ab4a; --amber-bg: #2a2313;
+      --red: #e0796a; --red-bg: #2c1a17;
+      --steel: #8d99a6; --steel-bg: #22272c;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--fg); font-family: var(--sans);
+    font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  code, .mono { font-family: var(--mono); font-size: .92em; }
+  a { color: var(--blue); }
+  .wrap { max-width: 1500px; margin: 0 auto; padding: 18px 20px 40px; }
+
+  /* ---------- top bar ---------- */
+  .topbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 14px; }
+  .topbar h1 { font-size: 17px; margin: 0; font-weight: 600; letter-spacing: .01em; }
+  .topbar .sub { color: var(--muted); font-size: 12.5px; }
+  .topbar .spacer { flex: 1 1 auto; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px;
+    background: var(--chip-bg); color: var(--muted); font-size: 12px; white-space: nowrap;
+  }
+  .chip.branch { font-family: var(--mono); font-size: 11.5px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
+  .dot.live { background: var(--green); animation: breathe 2s ease-in-out infinite; }
+  .dot.stale { background: var(--amber); }
+  .dot.off { background: var(--red); }
+  @keyframes breathe { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .btn {
+    appearance: none; border: 1px solid var(--border-strong); background: var(--card); color: var(--fg);
+    border-radius: 7px; padding: 4px 10px; font-size: 12.5px; cursor: pointer; font-family: inherit;
+  }
+  .btn:hover { border-color: var(--muted); }
+  .btn[aria-pressed="false"] { color: var(--muted); }
+
+  /* ---------- banners ---------- */
+  .banner {
+    border: 1px solid var(--amber); background: var(--amber-bg); color: var(--fg);
+    border-radius: 8px; padding: 9px 12px; margin-bottom: 14px; font-size: 13px;
+  }
+  .banner.err { border-color: var(--red); background: var(--red-bg); }
+  .banner ul { margin: 4px 0 0; padding-left: 18px; }
+  .banner li { margin: 1px 0; }
+
+  /* ---------- KPI strip ---------- */
+  .kpis {
+    display: grid; grid-template-columns: minmax(220px, 1.4fr) minmax(180px, 1fr) minmax(180px, 1fr) minmax(200px, 1.2fr);
+    gap: 12px; margin-bottom: 14px;
+  }
+  .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 11px 13px; box-shadow: var(--shadow); min-width: 0; }
+  .kpi .k { color: var(--muted); font-size: 11.5px; letter-spacing: .03em; margin-bottom: 5px; }
+  .kpi .v { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+  .kpi .v small { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .bar { height: 7px; border-radius: 4px; background: var(--chip-bg); overflow: hidden; margin-top: 8px; }
+  .bar > span { display: block; height: 100%; background: var(--green); border-radius: 4px; transition: width .4s ease; }
+  .kpi .note { color: var(--muted); font-size: 11.5px; margin-top: 6px; }
+
+  /* ---------- layout ---------- */
+  .grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(340px, 1fr); gap: 14px; align-items: start; }
+  @media (max-width: 1080px) { .grid { grid-template-columns: minmax(0, 1fr); } .kpis { grid-template-columns: 1fr 1fr; } }
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px 15px; box-shadow: var(--shadow); min-width: 0; }
+  .panel + .panel { margin-top: 14px; }
+  .panel h2 { font-size: 13px; margin: 0 0 10px; font-weight: 600; letter-spacing: .02em; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .panel h2 .hint { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .panel h3 { font-size: 12.5px; margin: 16px 0 8px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
+
+  /* ---------- flow ---------- */
+  .flow-wrap { overflow-x: auto; }
+  svg#flow { display: block; width: 100%; min-width: 620px; height: auto; }
+  .flow-caption { margin: 10px 0 0; font-size: 13px; color: var(--fg); }
+  .flow-caption .stage { font-weight: 600; }
+  .flow-caption .muted { color: var(--muted); }
+
+  .edge { stroke: var(--border-strong); stroke-width: 1.6; fill: none; }
+  .edge.lit { stroke: var(--blue); stroke-width: 2.1; stroke-dasharray: 6 5; animation: dash 1.1s linear infinite; }
+  .edge.blocked { stroke: var(--amber); stroke-width: 2.1; }
+  .edge.done { stroke: var(--green); stroke-width: 2.1; }
+  @keyframes dash { to { stroke-dashoffset: -11; } }
+  .edge-label { font-size: 11px; fill: var(--muted); }
+  .edge-label-bg { fill: var(--card); }
+
+  .node rect { stroke-width: 1.6; rx: 9; }
+  .node .t { font-size: 12.5px; font-weight: 600; fill: var(--fg); }
+  .node .d { font-size: 10.5px; fill: var(--muted); }
+  .node.phase-setup rect    { fill: var(--blue-bg);  stroke: var(--blue); }
+  .node.phase-loop rect     { fill: var(--steel-bg); stroke: var(--steel); }
+  .node.phase-decision rect { fill: var(--amber-bg); stroke: var(--amber); }
+  .node.phase-done rect     { fill: var(--green-bg); stroke: var(--green); }
+  .node.todo rect { opacity: .45; stroke-dasharray: 3 3; }
+  .node.todo .t, .node.todo .d { opacity: .5; }
+  .node.done rect { opacity: .95; }
+  .node.active rect { stroke-width: 2.8; animation: nodepulse 1.7s ease-in-out infinite; }
+  .node.active { filter: drop-shadow(0 0 5px rgba(61, 127, 196, .5)); }
+  @media (prefers-color-scheme: dark) { .node.active { filter: drop-shadow(0 0 5px rgba(106, 169, 224, .45)); } }
+  .node.active .t { font-weight: 700; }
+  @keyframes nodepulse { 0%,100% { stroke-opacity: 1 } 50% { stroke-opacity: .4 } }
+  .node.blocked rect { stroke: var(--amber); stroke-width: 2.8; stroke-dasharray: 5 4; animation: nodepulse 1.7s ease-in-out infinite; }
+
+  #token { transition: transform .55s cubic-bezier(.4, 0, .2, 1); }
+  #token rect { fill: var(--blue); opacity: .95; }
+  #token.blocked rect { fill: var(--amber); }
+  #token.done rect { fill: var(--green); }
+  #token text { font-size: 10.5px; font-weight: 700; fill: #fff; font-family: var(--mono); }
+
+  /* ---------- timeline ---------- */
+  .timeline { display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; }
+  .tl {
+    position: relative; min-width: 92px; flex: 1 1 auto; border: 1px solid var(--border);
+    border-left: 3px solid var(--steel); border-radius: 7px; padding: 6px 9px; background: var(--chip-bg);
+    font-size: 11.5px; color: var(--muted); overflow: hidden;
+  }
+  .tl .n { color: var(--fg); font-weight: 600; }
+  .tl .s { display: block; font-family: var(--mono); font-size: 11px; margin-top: 1px; }
+  .tl.done { border-left-color: var(--green); }
+  .tl.blocked { border-left-color: var(--amber); background: var(--amber-bg); }
+  .tl.running { border-left-color: var(--blue); background: var(--blue-bg); animation: breathe 2.2s ease-in-out infinite; }
+  .timeline .empty { color: var(--muted); font-size: 12.5px; }
+
+  /* ---------- board ---------- */
+  .board { display: flex; flex-direction: column; gap: 10px; }
+  .story { border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; background: var(--card); }
+  .story.done { border-left: 3px solid var(--green); }
+  .story.running { border-left: 3px solid var(--blue); background: var(--blue-bg); }
+  .story.blocked { border-left: 3px solid var(--amber); background: var(--amber-bg); }
+  .story.todo { border-left: 3px solid var(--border-strong); }
+  .story .head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .story .id { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+  .story .title { font-weight: 600; font-size: 13.5px; }
+  .story .badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+  .badge.done { background: var(--green-bg); color: var(--green); border: 1px solid var(--green); }
+  .badge.running { background: var(--blue-bg); color: var(--blue); border: 1px solid var(--blue); }
+  .badge.blocked { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber); }
+  .badge.todo { background: var(--chip-bg); color: var(--muted); border: 1px solid var(--border-strong); }
+  .badge.pri { background: var(--chip-bg); color: var(--muted); border: 1px solid var(--border); }
+  .story .desc { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+  .story .meta { margin-top: 7px; display: flex; flex-direction: column; gap: 5px; }
+  .story .row { display: flex; gap: 7px; align-items: baseline; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .story .row .k { color: var(--faint); flex: none; }
+  .commit-chip { font-family: var(--mono); font-size: 11.5px; background: var(--chip-bg); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; }
+  .story ul.ac { margin: 4px 0 0; padding-left: 0; list-style: none; }
+  .story ul.ac li { font-size: 12px; color: var(--muted); padding-left: 18px; position: relative; margin: 2px 0; }
+  .story ul.ac li::before { content: "○"; position: absolute; left: 3px; color: var(--faint); }
+  .story.done ul.ac li::before { content: "✓"; color: var(--green); }
+  .files li { display: flex; gap: 8px; font-family: var(--mono); font-size: 11.5px; }
+  .files .add { color: var(--green); } .files .del { color: var(--red); }
+  .files { list-style: none; margin: 4px 0 0; padding: 0; }
+  details.fold { margin-top: 8px; }
+  details.fold > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  details.fold > summary:hover { color: var(--fg); }
+  details.fold .body { margin-top: 7px; font-size: 12.5px; color: var(--muted); }
+  details.fold .body p { margin: 5px 0; }
+  details.fold .body ul { margin: 5px 0; padding-left: 18px; }
+  details.fold .body code { background: var(--chip-bg); padding: 0 3px; border-radius: 3px; }
+  .pend { padding: 6px 0; border-top: 1px solid var(--border); }
+  .pend:first-child { border-top: 0; padding-top: 0; }
+  .pend .pts { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-bottom: 3px; }
+
+  /* ---------- commits / archive / patterns ---------- */
+  .commits { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .commits li { display: flex; gap: 9px; align-items: baseline; font-size: 12.5px; min-width: 0; }
+  .commits .subj { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .commits .when { color: var(--muted); font-size: 11.5px; margin-left: auto; flex: none; }
+  .archive-run { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 7px; }
+  .archive-run .head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 12.5px; }
+  .archive-run .name { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+  .archive-run .bar { margin-top: 6px; }
+  .archive-run ul { list-style: none; margin: 7px 0 0; padding: 0; font-size: 12px; color: var(--muted); }
+  .archive-run ul li { padding-left: 16px; position: relative; }
+  .archive-run ul li::before { content: "○"; position: absolute; left: 0; color: var(--faint); }
+  .archive-run ul li.ok::before { content: "✓"; color: var(--green); }
+  .only-mobile { display: none; }
+
+  /* ---------- empty state ---------- */
+  .empty { border: 1px dashed var(--border-strong); border-radius: 10px; padding: 22px; background: var(--card); }
+  .empty h2 { margin: 0 0 8px; font-size: 15px; }
+  .empty ol { margin: 8px 0 0; padding-left: 20px; }
+  .empty ol li { margin: 7px 0; }
+  .empty code { background: var(--chip-bg); padding: 1px 6px; border-radius: 4px; }
+
+  .footer { color: var(--faint); font-size: 11.5px; margin-top: 18px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .pulse-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: breathe 2s ease-in-out infinite; vertical-align: middle; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="topbar">
+    <h1 id="title">Ralph 看板</h1>
+    <span class="chip branch" id="branch" hidden></span>
+    <span class="chip" id="mode" title=""><span class="dot" id="mode-dot"></span><span id="mode-text">连接中…</span></span>
+    <span class="spacer"></span>
+    <button class="btn" id="auto" aria-pressed="true" title="每 2 秒重新读取磁盘上的 prd.json / progress.txt / git">自动刷新：开</button>
+    <button class="btn" id="manual" title="立即重新读取一次">刷新</button>
+  </header>
+
+  <div id="errors" class="banner err" hidden></div>
+
+  <section class="kpis" id="kpis"></section>
+
+  <div class="grid">
+    <div>
+      <section class="panel">
+        <h2>流程视图 <span class="hint" id="flow-hint"></span></h2>
+        <div class="flow-wrap">
+          <svg id="flow" viewBox="0 0 780 745" role="img" aria-label="Ralph 循环流程图：写 PRD → 转 prd.json → 启动循环 → 挑故事 → 实现 → 跑检查 → 提交 → 更新 prd.json → 写 progress.txt → 判断是否还有故事 → 完成"></svg>
+        </div>
+        <p class="flow-caption" id="flow-caption"></p>
+        <details class="fold">
+          <summary>这张图怎么看</summary>
+          <div class="body">
+            <p>节点与连线是 Ralph 循环的真实路径；亮起的连线段表示已经走过，脉冲的节点是当前阶段，蓝色胶囊是当前正在处理的故事。</p>
+            <p>阶段判定优先使用循环写入的 <code>.ralph/events.jsonl</code> 事件；没有事件日志时（旧版本跑出的项目）回退为「最新提交 + prd.json 状态」的推断，此时标题栏会标注「推断」。子代理正在跑的时候，实现与检查两步无法从磁盘区分，统一显示为「实现中」。</p>
+          </div>
+        </details>
+      </section>
+
+      <section class="panel">
+        <h2>迭代时间线 <span class="hint" id="timeline-hint"></span></h2>
+        <div class="timeline" id="timeline"></div>
+      </section>
+
+      <section class="panel">
+        <h2>最近提交 <span class="hint">当前分支</span></h2>
+        <ul class="commits" id="commits"></ul>
+      </section>
+    </div>
+
+    <div>
+      <section class="panel">
+        <h2>任务看板 <span class="hint" id="board-hint"></span></h2>
+        <div class="board" id="board"></div>
+      </section>
+
+      <section class="panel">
+        <details class="fold" id="patterns-fold">
+          <summary>代码库经验（progress.txt 的 Codebase Patterns）</summary>
+          <div class="body" id="patterns"></div>
+        </details>
+        <details class="fold" id="archive-fold">
+          <summary>历史运行（archive/）</summary>
+          <div class="body" id="archive"></div>
+        </details>
+      </section>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <span><span class="pulse-dot" id="foot-dot"></span></span>
+    <span id="gen-at"></span>
+    <span id="foot-mode"></span>
+  </footer>
+</div>
+
+<!-- initial state: injected by serve.py on every request, or baked in by --snapshot.
+     The placeholder must stay alone on its own line: the bash injector replaces that
+     whole line, and the tag around it must survive. -->
+<script id="state" type="application/json">
+__RALPH_STATE__
+</script>
+<script>
+(function () {
+  'use strict';
+
+  var PLACEHOLDER = '__RALPH_STATE__';
+  var POLL_MS = 2000;
+  var isFile = location.protocol === 'file:';
+
+  var state = null;
+  var auto = true;
+  var mode = isFile ? 'snapshot' : 'live';   // live | snapshot | disconnected
+  var lastOk = 0;
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function dt(ts) { var d = new Date(ts); return isNaN(d) ? null : d; }
+  function rel(epoch) {
+    if (!epoch) return '—';
+    var s = Math.max(0, Math.floor(Date.now() / 1000) - epoch);
+    if (s < 10) return '刚刚';
+    if (s < 60) return s + ' 秒前';
+    if (s < 3600) return Math.floor(s / 60) + ' 分钟前';
+    if (s < 86400) return Math.floor(s / 3600) + ' 小时前';
+    return Math.floor(s / 86400) + ' 天前';
+  }
+  function dur(sec) {
+    if (sec == null || isNaN(sec) || sec < 0) return '—';
+    if (sec < 60) return Math.round(sec) + ' 秒';
+    var m = Math.floor(sec / 60), s = Math.round(sec % 60);
+    if (m < 60) return m + ' 分' + (s ? ' ' + s + ' 秒' : '');
+    return Math.floor(m / 60) + ' 小时 ' + (m % 60) + ' 分';
+  }
+  function secondsBetween(a, b) { return (a != null && b != null) ? Math.max(0, b - a) : null; }
+  // minimal markdown: escape first, then **bold**, `code`, and - bullets
+  function mdLite(src) {
+    var lines = esc(src || '').split('\n'), out = '', inList = false;
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>');
+      if (/^\s*[-*]\s+/.test(line)) {
+        if (!inList) { out += '<ul>'; inList = true; }
+        out += '<li>' + line.replace(/^\s*[-*]\s+/, '') + '</li>';
+      } else {
+        if (inList) { out += '</ul>'; inList = false; }
+        if (line.trim() !== '') out += '<p>' + line + '</p>';
+      }
+    }
+    if (inList) out += '</ul>';
+    return out;
+  }
+
+  /* ------------------------------------------------------------------ flow */
+
+  var BOX = { w: 172, h: 58 };
+  var STEPS = [
+    { n: 1,  label: '写 PRD',         desc: '/prd 生成需求文档',        phase: 'setup',    x: 98,  y: 52 },
+    { n: 2,  label: '转成 prd.json',  desc: '/ralph 拆成用户故事',      phase: 'setup',    x: 320, y: 52 },
+    { n: 3,  label: '启动循环',       desc: '/ralph-run 或 ralph.sh',   phase: 'setup',    x: 542, y: 52 },
+    { n: 4,  label: '挑故事',         desc: '最高优先级的 passes:false', phase: 'loop',     x: 108, y: 318 },
+    { n: 5,  label: '实现',           desc: '全新上下文的子代理',       phase: 'loop',     x: 250, y: 178 },
+    { n: 6,  label: '跑检查',         desc: 'typecheck / lint / test', phase: 'loop',     x: 530, y: 178 },
+    { n: 7,  label: '提交',           desc: 'feat: US-XXX - 标题',     phase: 'loop',     x: 672, y: 318 },
+    { n: 8,  label: '更新 prd.json',  desc: 'passes: true',            phase: 'loop',     x: 530, y: 458 },
+    { n: 9,  label: '写 progress.txt', desc: '本轮经验与教训',          phase: 'loop',     x: 250, y: 458 },
+    { n: 10, label: '还有故事？',     desc: '只看 prd.json 的 passes',  phase: 'decision', x: 390, y: 600 },
+    { n: 11, label: '完成',           desc: '全部 passes: true',        phase: 'done',     x: 390, y: 700 }
+  ];
+  var EDGES = [
+    { from: 1,  to: 2,  order: 2 },
+    { from: 2,  to: 3,  order: 3 },
+    { from: 3,  to: 4,  order: 4, path: 'M542,81 C542,200 108,190 108,289' },
+    { from: 4,  to: 5,  order: 5 },
+    { from: 5,  to: 6,  order: 6 },
+    { from: 6,  to: 7,  order: 7 },
+    { from: 7,  to: 8,  order: 8 },
+    { from: 8,  to: 9,  order: 9 },
+    { from: 9,  to: 10, order: 10 },
+    { from: 10, to: 4,  order: 10, label: '是', yes: true,
+      path: 'M304,600 C120,600 34,520 34,380 C34,320 62,318 108,318' },
+    { from: 10, to: 11, order: 11, label: '否', path: 'M390,629 L390,671' }
+  ];
+  var stepByN = {}; STEPS.forEach(function (s) { stepByN[s.n] = s; });
+
+  function box(n) { var s = stepByN[n]; return { x: s.x - BOX.w / 2, y: s.y - BOX.h / 2 }; }
+
+  // clip the segment a->b so it starts and ends on the box borders (not centers)
+  function trim(ax, ay, bx, by) {
+    var dx = bx - ax, dy = by - ay;
+    var hw = BOX.w / 2 + 6, hh = BOX.h / 2 + 6;
+    var tx = dx === 0 ? Infinity : hw / Math.abs(dx);
+    var ty = dy === 0 ? Infinity : hh / Math.abs(dy);
+    var t = Math.min(tx, ty);
+    return { x1: ax + dx * t, y1: ay + dy * t, x2: bx - dx * t, y2: by - dy * t };
+  }
+
+  function buildFlow() {
+    var svg = $('flow'), NS = 'http://www.w3.org/2000/svg';
+    var mk = function (tag, attrs) {
+      var e = document.createElementNS(NS, tag);
+      for (var k in attrs) e.setAttribute(k, attrs[k]);
+      return e;
+    };
+    var defs = mk('defs', {});
+    var marker = mk('marker', { id: 'arrow', viewBox: '0 0 10 10', refX: '9', refY: '5',
+      markerWidth: '6', markerHeight: '6', orient: 'auto-start-reverse' });
+    marker.appendChild(mk('path', { d: 'M0,0 L10,5 L0,10 z', fill: 'context-stroke' }));
+    defs.appendChild(marker);
+    svg.appendChild(defs);
+
+    var gEdges = mk('g', {}), gNodes = mk('g', {}), gLabels = mk('g', {});
+    EDGES.forEach(function (e) {
+      var a = stepByN[e.from], b = stepByN[e.to], d, mid;
+      if (e.path) { d = e.path; mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
+      else { var t = trim(a.x, a.y, b.x, b.y); d = 'M' + t.x1 + ',' + t.y1 + ' L' + t.x2 + ',' + t.y2;
+             mid = { x: (t.x1 + t.x2) / 2, y: (t.y1 + t.y2) / 2 }; }
+      var p = mk('path', { d: d, class: 'edge', 'marker-end': 'url(#arrow)', 'data-order': e.order,
+        'data-yes': e.yes ? '1' : '0' });
+      var title = mk('title', {});
+      title.textContent = stepByN[e.from].label + ' → ' + stepByN[e.to].label + (e.label ? '（' + e.label + '）' : '');
+      p.appendChild(title);
+      gEdges.appendChild(p);
+      if (e.label) {
+        var lx = e.from === 10 && e.to === 4 ? 150 : mid.x + 12;
+        var ly = e.from === 10 && e.to === 4 ? 540 : mid.y;
+        var bg = mk('rect', { class: 'edge-label-bg', x: lx - 9, y: ly - 11, width: 20, height: 16, rx: 4 });
+        var tx = mk('text', { class: 'edge-label', x: lx, y: ly, 'text-anchor': 'middle' });
+        tx.textContent = e.label;
+        gLabels.appendChild(bg); gLabels.appendChild(tx);
+      }
+    });
+
+    STEPS.forEach(function (s) {
+      var b = box(s.n);
+      var g = mk('g', { class: 'node phase-' + s.phase, 'data-step': s.n });
+      var title = mk('title', {}); title.textContent = s.label + ' — ' + s.desc;
+      g.appendChild(title);
+      g.appendChild(mk('rect', { x: b.x, y: b.y, width: BOX.w, height: BOX.h, rx: 9 }));
+      var t = mk('text', { class: 't', x: s.x, y: s.y - 4, 'text-anchor': 'middle' }); t.textContent = s.label;
+      var d = mk('text', { class: 'd', x: s.x, y: s.y + 13, 'text-anchor': 'middle' }); d.textContent = s.desc;
+      g.appendChild(t); g.appendChild(d);
+      gNodes.appendChild(g);
+    });
+
+    svg.appendChild(gEdges); svg.appendChild(gLabels); svg.appendChild(gNodes);
+
+    var tok = mk('g', { id: 'token' });
+    tok.appendChild(mk('rect', { x: 0, y: 0, width: 74, height: 21, rx: 10 }));
+    var tt = mk('text', { x: 37, y: 15, 'text-anchor': 'middle' }); tt.textContent = '';
+    tok.appendChild(tt);
+    svg.appendChild(tok);
+  }
+
+  var flowStageCache = '';
+  function updateFlow(st) {
+    var loop = st.loop || {}, prd = st.prd;
+    var stage = loop.stage || 'no-prd';
+    var node = loop.stage_node || 1;
+    var sig = [stage, node, loop.iteration, loop.running, loop.source, loop.stale, prd ? prd.counts.done + '/' + prd.counts.total : 'noprd', loop.story].join('|');
+    if (sig === flowStageCache) return;      // avoid restarting CSS animations on every poll
+    flowStageCache = sig;
+
+    var lim = { 'no-prd': 1, implement: 5, 'update-prd': 8, blocked: 5, idle: 4, between: 10, done: 11 }[stage];
+    if (lim == null) lim = 1;
+    var prevLap = (loop.iteration || 0) >= 2 || stage === 'between' || stage === 'done';
+
+    var edges = $('flow').querySelectorAll('.edge');
+    for (var i = 0; i < edges.length; i++) {
+      var e = edges[i], ord = +e.getAttribute('data-order'), isYes = e.getAttribute('data-yes') === '1';
+      // The "是" edge was traversed in an earlier lap of the loop, so it lights up
+      // as soon as there has been more than one iteration — not via the current
+      // iteration's progress limit.
+      var lit = isYes ? prevLap : (ord <= lim);
+      var cls = 'edge';
+      if (lit) cls += (stage === 'done' && ord === 11) ? ' done' : (stage === 'blocked' ? ' blocked' : ' lit');
+      else if (stage === 'blocked' && ord === 5) cls += ' blocked';
+      e.setAttribute('class', cls);
+    }
+
+    var nodes = $('flow').querySelectorAll('.node');
+    for (var j = 0; j < nodes.length; j++) {
+      var n = +nodes[j].getAttribute('data-step'), cls = nodes[j].getAttribute('class').split(' ')[0];
+      var isActive = n === node;
+      var isDone = n < node || (stage === 'done' && n === 11);
+      if (stage === 'blocked' && n === 5) { isActive = true; isDone = false; }
+      var out = 'node phase-' + stepByN[n].phase;
+      if (isActive) out += (stage === 'blocked' && n === node) || (stage === 'blocked' && n === 5) ? ' blocked' : ' active';
+      else if (isDone) out += ' done';
+      else out += ' todo';
+      nodes[j].setAttribute('class', out);
+    }
+
+    var tok = $('token'), txt = tok.querySelector('text'), rect = tok.querySelector('rect');
+    var label = loop.story || (stage === 'done' ? '完成' : '');
+    if (!label) { tok.setAttribute('opacity', '0'); }
+    else {
+      tok.setAttribute('opacity', '1');
+      txt.textContent = label;
+      var w = Math.max(40, label.length * 8.2 + 16);
+      rect.setAttribute('width', w);
+      txt.setAttribute('x', w / 2);
+      var target = stepByN[stage === 'blocked' ? 5 : node] || stepByN[1];
+      // centered above the node it belongs to
+      tok.setAttribute('transform', 'translate(' + (target.x - w / 2) + ',' + (target.y - 46) + ')');
+      tok.setAttribute('class', stage === 'blocked' ? 'blocked' : (stage === 'done' ? 'done' : ''));
+    }
+
+    var hint = $('flow-hint');
+    var bits = [];
+    if (loop.iteration) bits.push('第 ' + loop.iteration + ' 轮' + (loop.max_iterations ? ' / 最多 ' + loop.max_iterations : ''));
+    if (loop.driver && loop.driver !== 'unknown') bits.push(loop.driver === 'headless' ? '无头驱动' : '会话内驱动');
+    if (loop.source === 'inferred' && prd) bits.push('推断');
+    hint.textContent = bits.join(' · ');
+
+    var cap = $('flow-caption');
+    var storyTitle = '';
+    if (loop.story && prd) {
+      var s = (prd.stories || []).filter(function (x) { return x.id === loop.story; })[0];
+      if (s) storyTitle = s.title;
+    }
+    var caption = '<span class="stage">' + esc(loop.stage_label || '') + '</span>';
+    if (loop.story) caption += ' — <span class="mono">' + esc(loop.story) + '</span> ' + esc(storyTitle);
+    var notes = [];
+    if (loop.running && loop.stale) notes.push('已经 ' + rel(loop.last_event_age_sec ? st.now_epoch - loop.last_event_age_sec : 0) + '没有新事件，可能已中断');
+    if (loop.running && !loop.stale) notes.push('正在运行 · 最近活动 ' + rel(st.now_epoch - (loop.last_event_age_sec || 0)));
+    if (!loop.running && loop.last_event_age_sec != null) notes.push('最近活动 ' + rel(st.now_epoch - loop.last_event_age_sec));
+    if (notes.length) caption += ' <span class="muted">（' + esc(notes.join('；')) + '）</span>';
+    cap.innerHTML = caption;
+  }
+
+  /* ------------------------------------------------------------------ kpis */
+
+  function renderKpis(st) {
+    var prd = st.prd, loop = st.loop || {}, el = $('kpis');
+    if (!prd) {
+      el.innerHTML = '';
+      return;
+    }
+    var c = prd.counts, pct = c.total ? Math.round(100 * c.done / c.total) : 0;
+    var next = c.remaining > 0 ? (prd.stories.filter(function (s) { return s.id === prd.next; })[0] || {}) : null;
+    var tone = loop.stage === 'done' ? 'ok' : loop.stage === 'blocked' ? 'warn' : loop.stage === 'idle' ? 'idle' : 'run';
+    el.innerHTML =
+      '<div class="kpi"><div class="k">进度</div>' +
+        '<div class="v">' + c.done + ' / ' + c.total + ' <small>故事已完成</small></div>' +
+        '<div class="bar"><span style="width:' + pct + '%' + (tone === 'ok' ? ';background:var(--green)' : tone === 'warn' ? ';background:var(--amber)' : '') + '"></span></div>' +
+        '<div class="note">' + (c.remaining > 0 ? '还剩 ' + c.remaining + ' 个故事' : '全部完成' + (prd.branchName ? '' : '')) + '</div>' +
+      '</div>' +
+      '<div class="kpi"><div class="k">循环状态</div>' +
+        '<div class="v">' + esc(loop.stage_label || '—') + '</div>' +
+        '<div class="note">' +
+          (loop.iteration ? '第 ' + loop.iteration + ' 轮' + (loop.max_iterations ? ' / 最多 ' + loop.max_iterations : '') + ' · ' : '') +
+          (loop.last_event_age_sec != null ? '最近活动 ' + esc(rel(st.now_epoch - loop.last_event_age_sec)) : '没有运行记录') +
+          (loop.source === 'inferred' ? ' · 推断' : '') +
+        '</div>' +
+      '</div>' +
+      '<div class="kpi"><div class="k">下一个</div>' +
+        '<div class="v">' + (next ? '<span class="mono">' + esc(next.id) + '</span> ' + esc(next.title) : '— 没有待办故事') + '</div>' +
+        (next && next.acceptanceCriteria && next.acceptanceCriteria.length
+          ? '<div class="note">' + next.acceptanceCriteria.length + ' 条验收标准</div>' : '') +
+      '</div>' +
+      '<div class="kpi"><div class="k">工作区</div>' +
+        '<div class="v">' + (st.project.dirty ? '有未提交改动' : '干净') + '</div>' +
+        '<div class="note mono">' + esc(st.project.branch || '(detached)') + (st.project.head ? ' @ ' + esc(st.project.head.short) : '') + '</div>' +
+      '</div>';
+  }
+
+  /* ------------------------------------------------------------------ board */
+
+  function storyStatus(st, s) {
+    var loop = st.loop || {};
+    if (s.passes) return { cls: 'done', label: '已完成' };
+    if (loop.story === s.id) {
+      if (loop.stage === 'blocked') return { cls: 'blocked', label: '已卡住' };
+      if (loop.running || loop.stage === 'between') return { cls: 'running', label: '进行中' };
+      return { cls: 'blocked', label: '未完成' };
+    }
+    return { cls: 'todo', label: '待办' };
+  }
+
+  function renderBoard(st) {
+    var prd = st.prd, el = $('board'), hint = $('board-hint');
+    if (!prd) {
+      hint.textContent = '';
+      $('kpis').innerHTML = '';
+      el.innerHTML =
+        '<div class="empty">' +
+        '<h2>还没有 prd.json</h2>' +
+        '<p style="color:var(--muted);margin:0">这个目录里还没有 Ralph 的任务文件。三步起步：</p>' +
+        '<ol>' +
+          '<li><code>/prd 你的功能描述</code> — 生成 PRD（含澄清问题与可验证的验收标准）</li>' +
+          '<li><code>/ralph tasks/prd-*.md</code> — 转成 prd.json 用户故事</li>' +
+          '<li><code>/ralph-run</code> — 启动循环；这个页面会随循环自动刷新</li>' +
+        '</ol>' +
+        '<p style="color:var(--muted);margin-bottom:0;font-size:12.5px">看板的全部数据都来自磁盘上的 prd.json、progress.txt、git 历史与 .ralph/events.jsonl，它不会自己编造进度。</p>' +
+        '</div>';
+      return;
+    }
+    hint.textContent = '共 ' + prd.counts.total + ' 个故事 · 按优先级排序 · 点开可看验收标准与提交';
+
+    var html = '';
+    prd.stories.forEach(function (s) {
+      var stt = storyStatus(st, s);
+      var open = (s.id === (st.loop || {}).story) || stt.cls === 'blocked';
+      html += '<article class="story ' + stt.cls + '" id="story-' + esc(s.id) + '">' +
+        '<div class="head">' +
+          '<span class="id">' + esc(s.id) + '</span>' +
+          '<span class="title">' + esc(s.title) + '</span>' +
+          '<span class="badge ' + stt.cls + '">' + stt.label + '</span>' +
+          '<span class="badge pri">P' + esc(s.priority) + '</span>' +
+        '</div>';
+      if (s.description) html += '<div class="desc">' + esc(s.description) + '</div>';
+      html += '<details class="fold"' + (open ? ' open' : '') + '><summary>验收标准（' + (s.acceptanceCriteria || []).length + '）</summary><div class="body"><ul class="ac">' +
+        (s.acceptanceCriteria || []).map(function (a) { return '<li>' + esc(a) + '</li>'; }).join('') +
+        '</ul></div></details>';
+      if (s.commit) {
+        html += '<details class="fold"><summary>提交 <span class="commit-chip">' + esc(s.commit.short) + '</span></summary><div class="body">' +
+          '<p>' + esc(s.commit.subject) + '</p>' +
+          (s.commit.files && s.commit.files.length
+            ? '<ul class="files">' + s.commit.files.map(function (f) {
+                return '<li><span>' + esc(f.path) + '</span><span class="add">+' + (f.add == null ? '?' : f.add) + '</span><span class="del">-' + (f.del == null ? '?' : f.del) + '</span></li>';
+              }).join('') + '</ul>'
+            : '') +
+          '</div></details>';
+      } else if (stt.cls !== 'todo') {
+        html += '<div class="row"><span class="k">提交</span><span>还没有提交</span></div>';
+      }
+      if (s.notes) html += '<div class="row"><span class="k">备注</span><span>' + esc(s.notes) + '</span></div>';
+      var entries = s.progress || [];
+      if (entries.length) {
+        html += '<details class="fold"' + (open ? ' open' : '') + '><summary>进度记录（' + entries.length + ' 次尝试）</summary><div class="body">' +
+          entries.map(function (p, i) {
+            return '<div class="pend">' + (entries.length > 1 || i > 0 ? '<div class="pts">第 ' + (i + 1) + ' 次 · ' + esc(p.ts) + '</div>' : '<div class="pts">' + esc(p.ts) + '</div>') +
+              mdLite(p.body) + '</div>';
+          }).join('') +
+          '</div></details>';
+      } else if (stt.cls === 'todo') {
+        html += '<div class="row"><span class="k">进度</span><span>尚未开始</span></div>';
+      }
+      if (stt.cls === 'running' && st.project.dirty) {
+        html += '<div class="row"><span class="k">工作区</span><span>' + st.project.dirty_files.length + ' 个文件有未提交改动</span></div>';
+      }
+      html += '</article>';
+    });
+    el.innerHTML = html || '<div class="empty"><p>prd.json 里还没有用户故事。</p></div>';
+  }
+
+  /* --------------------------------------------------------------- timeline */
+
+  function renderTimeline(st) {
+    var el = $('timeline'), hint = $('timeline-hint'), its = st.iterations || [];
+    if (!its.length) {
+      el.innerHTML = '<div class="empty">还没有迭代记录。循环开始前会先写入 <code>.ralph/events.jsonl</code>；旧版本跑出的项目只能看到 progress.txt 里的文字记录。</div>';
+      hint.textContent = '';
+      return;
+    }
+    hint.textContent = its.length + ' 轮';
+    var now = st.now_epoch;
+    el.innerHTML = its.map(function (it) {
+      var end = it.ended_epoch || (st.loop && st.loop.running && (st.loop.iteration === it.n) ? now : null);
+      var d = secondsBetween(it.started_epoch, end);
+      var cls = it.status === 'done' ? 'done' : it.status === 'blocked' ? 'blocked' : (it.ended ? '' : 'running');
+      var flex = (st.loop && st.loop.running && it.n === st.loop.iteration) ? 1.6 : Math.max(1, d ? d / 600 : 1);
+      var title = '第 ' + it.n + ' 轮 · ' + (it.story || '—') + '\n开始 ' + (it.started || '—') + '\n' +
+        (it.ended ? '结束 ' + it.ended + ' · 耗时 ' + dur(d) : '仍在进行 · 已 ' + dur(secondsBetween(it.started_epoch, now)));
+      return '<div class="tl ' + cls + '" style="flex-grow:' + flex.toFixed(2) + '" data-story="' + esc(it.story || '') + '" title="' + esc(title) + '" role="button" tabindex="0">' +
+        '<span class="n">第 ' + it.n + ' 轮</span><span class="s">' + esc(it.story || '—') + '</span>' +
+        '<span class="s">' + (it.ended ? dur(d) : '进行中') + '</span></div>';
+    }).join('');
+  }
+
+  /* ------------------------------------------------------- commits/patterns/archive */
+
+  function renderCommits(st) {
+    var el = $('commits'), cs = st.recent_commits || [];
+    if (!cs.length) { el.innerHTML = '<li class="empty" style="color:var(--muted)">没有提交记录</li>'; return; }
+    el.innerHTML = cs.map(function (c) {
+      var t = dt(c.ts);
+      return '<li><span class="commit-chip">' + esc(c.short) + '</span><span class="subj" title="' + esc(c.subject) + '">' + esc(c.subject) + '</span>' +
+        '<span class="when" title="' + esc(c.ts) + '">' + (t ? rel(Math.floor(t.getTime() / 1000)) : '') + '</span></li>';
+    }).join('');
+  }
+
+  function renderPatterns(st) {
+    var el = $('patterns');
+    if (!st.patterns_md) {
+      el.innerHTML = '<p>progress.txt 里还没有 Codebase Patterns 段落。循环跑起来之后，每轮迭代会把它发现的可复用模式写进去。</p>';
+      return;
+    }
+    el.innerHTML = mdLite(st.patterns_md);
+  }
+
+  function renderArchive(st) {
+    var el = $('archive'), runs = st.archive || [];
+    if (!runs.length) { el.innerHTML = '<p>archive/ 里还没有历史运行。切换 PRD（branchName 变化）时，上一轮运行会被自动归档到这里。</p>'; return; }
+    el.innerHTML = runs.map(function (r) {
+      var pct = r.total ? Math.round(100 * r.done / r.total) : 0;
+      return '<div class="archive-run">' +
+        '<div class="head"><span class="name">' + esc(r.dir) + '</span>' +
+          (r.branch ? '<span class="chip branch">' + esc(r.branch) + '</span>' : '') +
+          '<span>' + r.done + ' / ' + r.total + '</span></div>' +
+        (r.description ? '<div class="desc">' + esc(r.description) + '</div>' : '') +
+        '<div class="bar"><span style="width:' + pct + '%"></span></div>' +
+        (r.stories && r.stories.length
+          ? '<details class="fold"><summary>故事清单</summary><ul>' + r.stories.map(function (s) {
+              return '<li class="' + (s.passes ? 'ok' : '') + '">' + esc(s.id) + ' ' + esc(s.title) + '</li>';
+            }).join('') + '</ul></details>'
+          : (r.has_prd ? '' : '<p style="color:var(--muted);font-size:12px;margin:6px 0 0">这个归档里没有 prd.json（当时被手动替换过），只剩进度日志。</p>')) +
+      '</div>';
+    }).join('');
+  }
+
+  function renderErrors(st) {
+    var el = $('errors'), errs = st.errors || [];
+    if (!errs.length) { el.hidden = true; el.innerHTML = ''; return; }
+    el.hidden = false;
+    el.innerHTML = '<strong>状态读取提示（页面仍然可用，缺失的部分不会被猜测）</strong><ul>' +
+      errs.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ul>';
+  }
+
+  function renderChrome(st) {
+    var prd = st.prd;
+    $('title').textContent = (prd && (prd.project || prd.description)) ? 'Ralph 看板 · ' + (prd.project || prd.description) : 'Ralph 看板';
+    var b = $('branch');
+    if (st.project.branch) { b.hidden = false; b.textContent = st.project.branch; } else { b.hidden = true; }
+
+    var dot = $('mode-dot'), txt = $('mode-text'), modeEl = $('mode');
+    if (mode === 'live') {
+      dot.className = 'dot live'; txt.textContent = '实时 · ' + rel(lastOk);
+      modeEl.title = '每 2 秒重新读取磁盘上的 prd.json / progress.txt / git';
+    } else if (mode === 'snapshot') {
+      dot.className = 'dot'; txt.textContent = '快照 · ' + rel(Math.floor(new Date(st.generated_at).getTime() / 1000));
+      modeEl.title = '这是一份静态快照（数据在生成时内嵌），不会自动更新。用 ralph-dashboard.sh 起服务可以获得实时视图。';
+    } else {
+      dot.className = 'dot off'; txt.textContent = '与看板服务失联';
+      modeEl.title = '最后一次成功读取：' + (lastOk ? rel(lastOk) : '从未') + '。请确认 serve.py 还在运行，然后点「刷新」。';
+    }
+    $('gen-at').textContent = '状态生成于 ' + st.generated_at + '（' + rel(st.now_epoch) + '）';
+    $('foot-mode').textContent = mode === 'live' ? '数据每次刷新时现读磁盘' : mode === 'snapshot' ? '静态快照' : '连接中断';
+    $('foot-dot').style.background = mode === 'live' ? 'var(--green)' : mode === 'snapshot' ? 'var(--faint)' : 'var(--red)';
+  }
+
+  function render() {
+    if (!state) return;
+    renderChrome(state);
+    renderErrors(state);
+    renderKpis(state);
+    updateFlow(state);
+    renderTimeline(state);
+    renderCommits(state);
+    renderBoard(state);
+    renderPatterns(state);
+    renderArchive(state);
+    document.title = (state.prd && state.prd.project ? state.prd.project + ' · ' : '') + 'Ralph 看板' +
+      (state.loop && state.loop.stage_label ? ' · ' + state.loop.stage_label : '');
+  }
+
+  /* --------------------------------------------------------------- wire up */
+
+  function loadEmbedded() {
+    var raw = $('state').textContent.trim();
+    if (!raw || raw === PLACEHOLDER) return false;
+    try { state = JSON.parse(raw); return true; } catch (e) { return false; }
+  }
+
+  function refresh() {
+    return fetch('/api/state', { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (st) { state = st; mode = 'live'; lastOk = Math.floor(Date.now() / 1000); render(); })
+      .catch(function () { mode = state ? 'disconnected' : mode; renderChrome(state || { generated_at: new Date().toISOString(), now_epoch: Math.floor(Date.now() / 1000), project: {}, loop: {} }); });
+  }
+
+  buildFlow();
+  if (loadEmbedded()) { mode = isFile ? 'snapshot' : 'live'; lastOk = Math.floor(Date.now() / 1000); render(); }
+  if (!isFile) { refresh(); setInterval(function () { if (auto && !document.hidden) refresh(); }, POLL_MS); }
+  setInterval(function () { if (state) { renderChrome(state); if (mode === 'live') renderTimeline(state); } }, 1000);
+
+  $('auto').addEventListener('click', function () {
+    auto = !auto;
+    this.setAttribute('aria-pressed', auto ? 'true' : 'false');
+    this.textContent = '自动刷新：' + (auto ? '开' : '关');
+    if (auto && !isFile) refresh();
+  });
+  $('manual').addEventListener('click', function () { if (isFile) { location.reload(); } else { refresh(); } });
+
+  // clicking an iteration or a story keeps the two views linked
+  $('timeline').addEventListener('click', function (ev) {
+    var t = ev.target.closest ? ev.target.closest('.tl') : null;
+    if (!t) return;
+    var id = t.getAttribute('data-story');
+    if (!id) return;
+    var card = document.getElementById('story-' + id);
+    if (card) { card.scrollIntoView({ behavior: 'smooth', block: 'center' }); card.style.outline = '2px solid var(--blue)'; setTimeout(function () { card.style.outline = ''; }, 1400); }
+  });
+})();
+</script>
+</body>
+</html>
