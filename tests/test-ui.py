@@ -343,6 +343,158 @@ def build_long_notes_fixture():
     return proj
 
 
+def docs_case(pw, port):
+    """The PRD document viewer: list → open → render, plus the degraded paths."""
+    proj = FIX / "proj-docs"
+    sh("bash", str(TESTS / "make-fixture.sh"), "running", str(proj))
+    tasks = proj / "tasks"
+    tasks.mkdir(exist_ok=True)
+    # A source document matching the fixture's prd.json (titles must match for the
+    # "source doc" marker), containing every markdown feature the renderer handles.
+    (tasks / "prd-task-priority.md").write_text("""\
+# PRD: Task Priority System
+
+## 1. Introduction
+
+Add **priority levels** to tasks so users can triage work.
+
+> Scope note: this revision drops the bulk-edit path.
+
+## 2. User Stories
+
+### US-001: Add priority field to database
+
+**Description:** As a developer, I need to store priority.
+
+**Acceptance Criteria:**
+- [x] Add priority column to tasks table: `high` | `medium` | `low`
+- [ ] Generate and run migration successfully
+- [ ] Typecheck passes
+
+### US-002: Display priority indicator on task cards
+
+**Acceptance Criteria:**
+- [ ] Each task card shows a colored badge
+  - red = high
+  - gray = low
+- [ ] Typecheck passes
+
+## 3. Functional Requirements
+
+1. FR-1: The system must allow setting a priority.
+2. FR-2: Changing priority must persist immediately.
+
+| Field | Type | Default |
+| --- | --- | --- |
+| priority | enum | medium |
+| updated_at | timestamp | now |
+
+```json
+{ "priority": "high", "id": "US-001" }
+```
+
+---
+
+## 4. Non-Goals
+
+- No bulk edit in this version.
+""", encoding="utf-8")
+    # A document that is NOT a source of prd.json, plus a non-PRD note.
+    (tasks / "prd-unrelated.md").write_text("# PRD: Something Else\n\n### ZZ-001: Different story\n\n- [ ] Nothing to do with tasks\n", encoding="utf-8")
+    (tasks / "notes.md").write_text("# Meeting notes\n\nNo stories here.\n", encoding="utf-8")
+
+    srv = Server(str(proj), port)
+    page = pw.chromium.launch().new_page(viewport={"width": 1600, "height": 1150})
+    attach(page, "docs")
+    page.goto(srv.url, wait_until="load")
+    page.wait_for_timeout(900)
+
+    check("文档: 面板存在", page.locator("[data-fold-key='panel:docs']").count() == 1)
+    check("文档: 列出 tasks/ 下的 md", page.locator(".doc-item").count() == 3,
+          f"实际 {page.locator('.doc-item').count()}")
+    hint = page.inner_text("#docs-hint")
+    check("文档: 标题点明总数与来源篇数", "3 篇" in hint and "1 篇" in hint, hint)
+
+    items = page.locator(".doc-item").all_inner_texts()
+    check("文档: 来源文档被标出", any("来源文档" in t for t in items), items)
+    check("文档: 非 PRD 被标出", any("非 PRD" in t for t in items), "")
+
+    # open the source document
+    page.locator(".doc-item", has_text="prd-task-priority").first.click()
+    page.wait_for_timeout(900)
+    body = page.locator("#doc-body")
+    check("文档: 正文已渲染", body.locator(".md-body").count() == 1)
+    check("文档: 渲染标题", body.locator(".md-h1, .md-h2, .md-h3").count() >= 5,
+          body.locator(".md-h1, .md-h2, .md-h3").count())
+    check("文档: 复选框渲染", body.locator(".md-check").count() == 5,
+          body.locator(".md-check").count())
+    check("文档: 已完成项有勾选态", body.locator(".md-task-done").count() == 1,
+          body.locator(".md-task-done").count())
+    check("文档: 表格渲染", body.locator(".md-table tbody tr").count() == 2,
+          body.locator(".md-table tbody tr").count())
+    check("文档: 代码块渲染", body.locator(".md-pre").count() == 1,
+          body.locator(".md-pre").count())
+    check("文档: 代码块内容原样", '"priority": "high"' in body.locator(".md-pre").inner_text())
+    check("文档: 嵌套列表渲染", body.locator(".md-list li").count() >= 6,
+          body.locator(".md-list li").count())
+    check("文档: 有序列表渲染", body.locator("ol.md-list").count() >= 1,
+          body.locator("ol.md-list").count())
+    check("文档: 引用块渲染", body.locator(".md-quote").count() == 1)
+    check("文档: 分隔线渲染", body.locator(".md-body hr").count() >= 1)
+    check("文档: 行内代码未泄漏反引号", "`" not in body.inner_text(),
+          body.inner_text()[:80])
+    check("文档: 原始 HTML 不执行", body.locator("script").count() == 0)
+
+    ov = page.evaluate("""() => {
+      const v = document.querySelector('.doc-view'); const vb = v.getBoundingClientRect(); let bad = 0;
+      v.querySelectorAll('.md-p, .md-li, .md-h, td, th, pre').forEach(el => {
+        const r = el.getBoundingClientRect(); if (r.width && r.right > vb.right + 0.5) bad++;
+      });
+      return bad;
+    }""")
+    check("文档: 正文不越出面板", ov == 0, f"{ov} 处")
+
+    page.locator("[data-fold-key='panel:docs']").screenshot(path=str(SHOTS / "docs-panel.png"))
+    page.context.browser.close()
+    srv.stop()
+
+
+def docs_degraded_case(pw, port):
+    """No tasks/ dir, and a document served from a snapshot with no server to ask."""
+    proj = FIX / "proj-nodocs"
+    sh("bash", str(TESTS / "make-fixture.sh"), "running", str(proj))
+    import shutil
+    shutil.rmtree(proj / "tasks", ignore_errors=True)
+
+    srv = Server(str(proj), port)
+    page = pw.chromium.launch().new_page(viewport={"width": 1400, "height": 900})
+    attach(page, "nodocs")
+    page.goto(srv.url, wait_until="load")
+    page.wait_for_timeout(800)
+    check("无 tasks/: 面板给出引导而不是报错",
+          "tasks/ 目录下还没有 PRD 文档" in page.inner_text("#doc-body"),
+          page.inner_text("#doc-body")[:60])
+    page.context.browser.close()
+    srv.stop()
+
+    # snapshot path: content must be embedded or the viewer says so plainly
+    sh("bash", str(PLUGIN / "scripts" / "ralph-dashboard.sh"), "--snapshot",
+       str(FIX / "docs-snap.html"), "--dir", str(FIX / "proj-docs"))
+    page = pw.chromium.launch().new_page(viewport={"width": 1400, "height": 900})
+    attach(page, "docsnap")
+    page.goto((FIX / "docs-snap.html").as_uri(), wait_until="load")
+    page.wait_for_timeout(700)
+    check("快照: 文档列表仍在", page.locator(".doc-item").count() == 3,
+          page.locator(".doc-item").count())
+    page.locator(".doc-item", has_text="prd-task-priority").first.click()
+    page.wait_for_timeout(600)
+    txt = page.inner_text("#doc-body")
+    check("快照: 能读到内嵌正文或明确说明未内嵌",
+          page.locator("#doc-body .md-body").count() == 1 or "没有内嵌" in txt,
+          txt[:80])
+    page.context.browser.close()
+
+
 def multirun_case(pw, port):
     """A project that was run twice: iteration numbers restart at 1, so the timeline
     must show both runs instead of silently keeping only the later one."""
@@ -397,6 +549,8 @@ def main():
         }, "board-empty.png")
         folds_case(pw, str(build_long_notes_fixture()), base + 4)
         multirun_case(pw, base + 5)
+        docs_case(pw, base + 6)
+        docs_degraded_case(pw, base + 7)
         snapshot_and_fragment(pw)
 
     real = [e for e in console_errors if "favicon" not in e]

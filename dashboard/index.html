@@ -214,6 +214,54 @@
   .pend:first-child { border-top: 0; padding-top: 0; }
   .pend .pts { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-bottom: 3px; }
 
+  /* ---------- PRD documents ---------- */
+  .docs-layout { display: grid; grid-template-columns: minmax(190px, 240px) minmax(0, 1fr); gap: 12px; align-items: start; }
+  @media (max-width: 900px) { .docs-layout { grid-template-columns: minmax(0, 1fr); } }
+  .doc-list { display: flex; flex-direction: column; gap: 4px; max-height: 620px; overflow-y: auto; }
+  .doc-item { text-align: left; border: 1px solid var(--border); background: var(--card); color: var(--fg);
+              border-radius: 8px; padding: 8px 10px; cursor: pointer; font: inherit; display: block; width: 100%;
+              overflow-wrap: anywhere; }
+  .doc-item:hover { border-color: var(--muted); }
+  .doc-item.sel { border-color: var(--blue); background: var(--blue-bg); }
+  .doc-item .fn { display: block; font-family: var(--mono); font-size: 11px; color: var(--muted);
+                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .doc-item .ti { display: block; font-size: 12.5px; font-weight: 600; margin-top: 3px; line-height: 1.35; }
+  .doc-item .mt { display: flex; font-size: 11px; color: var(--faint); margin-top: 5px; gap: 7px; flex-wrap: wrap; }
+  .doc-item .src { color: var(--green); }
+  .doc-view { min-width: 0; }
+  .doc-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 9px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  .doc-head .fn { font-family: var(--mono); font-size: 12px; }
+  .doc-head .meta { color: var(--muted); font-size: 11.5px; }
+  .doc-body { max-height: 640px; overflow-y: auto; padding-right: 4px; }
+  .doc-body.content-missing { max-height: none; }
+  .md-body { overflow-wrap: anywhere; }
+  .md-h { margin: 18px 0 8px; line-height: 1.35; }
+  .md-body > .md-h:first-child { margin-top: 0; }
+  .md-h1 { font-size: 18px; }
+  .md-h2 { font-size: 15.5px; border-bottom: 1px solid var(--border); padding-bottom: 5px; }
+  .md-h3 { font-size: 14px; }
+  .md-h4, .md-h5, .md-h6 { font-size: 13px; color: var(--muted); }
+  .md-p { margin: 8px 0; font-size: 13px; }
+  .md-list { margin: 7px 0; padding-left: 22px; }
+  .md-li { margin: 3px 0; font-size: 13px; }
+  .md-task-list { list-style: none; padding-left: 4px; }
+  .md-check { display: inline-block; width: 14px; height: 14px; border: 1.5px solid var(--border-strong);
+              border-radius: 3px; margin-right: 7px; vertical-align: -2px; text-align: center;
+              line-height: 12px; font-size: 11px; color: transparent; }
+  .md-task-done .md-check { background: var(--green); border-color: var(--green); color: #fff; }
+  .md-task-done { color: var(--muted); }
+  .md-quote { margin: 9px 0; padding: 4px 0 4px 12px; border-left: 3px solid var(--border-strong); color: var(--muted); }
+  .md-quote .md-p { margin: 4px 0; }
+  .md-pre { background: var(--chip-bg); border: 1px solid var(--border); border-radius: 7px;
+            padding: 10px 12px; overflow-x: auto; margin: 10px 0; }
+  .md-pre code { font-size: 12px; line-height: 1.5; white-space: pre; }
+  .md-table-wrap { overflow-x: auto; margin: 10px 0; }
+  .md-table { border-collapse: collapse; font-size: 12.5px; }
+  .md-table th, .md-table td { border: 1px solid var(--border); padding: 5px 9px; text-align: left; vertical-align: top; }
+  .md-table th { background: var(--chip-bg); font-weight: 600; }
+  .md-body hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
+  .doc-missing { border: 1px dashed var(--border-strong); border-radius: 8px; padding: 16px; color: var(--muted); font-size: 12.5px; }
+
   /* ---------- commits / archive / patterns ---------- */
   .commits { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
   .commits li { display: flex; gap: 9px; align-items: baseline; font-size: 12.5px; min-width: 0; }
@@ -290,6 +338,17 @@
         <div class="board" id="board"></div>
       </details>
 
+      <details class="panel" open data-fold-key="panel:docs">
+        <summary class="panel-head"><span class="caret">▸</span><span role="heading" aria-level="2">PRD 文档</span> <span class="hint" id="docs-hint"></span></summary>
+        <div class="docs-layout">
+          <div class="doc-list" id="doc-list"></div>
+          <div class="doc-view">
+            <div class="doc-head" id="doc-head" hidden></div>
+            <div class="doc-body" id="doc-body"></div>
+          </div>
+        </div>
+      </details>
+
       <details class="panel" open data-fold-key="panel:archive">
         <summary class="panel-head"><span class="caret">▸</span><span role="heading" aria-level="2">经验与历史</span></summary>
         <details class="fold" id="patterns-fold" data-fold-key="panel:patterns">
@@ -354,20 +413,117 @@ __RALPH_STATE__
     return Math.floor(m / 60) + ' 小时 ' + (m % 60) + ' 分';
   }
   function secondsBetween(a, b) { return (a != null && b != null) ? Math.max(0, b - a) : null; }
-  // minimal markdown: escape first, then **bold**, `code`, and - bullets
+
+  /* ------------------------------------------------------------ markdown ---
+     Enough of CommonMark to render a real PRD faithfully: headings, fenced code,
+     GFM tables, task checkboxes, nested and ordered lists, blockquotes, rules and
+     inline emphasis. Input is escaped first, so raw HTML in a document is shown as
+     text rather than executed. */
+  function mdInline(s) {
+    return s
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+      .replace(/~~([^~]+)~~/g, '<del>$1</del>');
+  }
+
   function mdLite(src) {
-    var lines = esc(src || '').split('\n'), out = '', inList = false;
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>');
-      if (/^\s*[-*]\s+/.test(line)) {
-        if (!inList) { out += '<ul>'; inList = true; }
-        out += '<li>' + line.replace(/^\s*[-*]\s+/, '') + '</li>';
-      } else {
-        if (inList) { out += '</ul>'; inList = false; }
-        if (line.trim() !== '') out += '<p>' + line + '</p>';
-      }
+    // Parse the RAW text: escaping first would turn ">" into "&gt;" and no block
+    // marker would ever match. Each piece is escaped as it is emitted instead.
+    var lines = (src || '').replace(/\t/g, '    ').split('\n');
+    var out = '', i = 0;
+    var listStack = [];   // indent levels currently open
+
+    function closeLists(to) {
+      while (listStack.length > to) { out += '</' + listStack.pop().tag + '>'; }
     }
-    if (inList) out += '</ul>';
+
+    while (i < lines.length) {
+      var line = lines[i];
+
+      // fenced code block
+      var fence = line.match(/^\s*```\s*(\S*)\s*$/);
+      if (fence) {
+        closeLists(0);
+        var lang = fence[1] || '', body = [];
+        i++;
+        while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { body.push(lines[i]); i++; }
+        i++;                                   // consume closing fence
+        out += '<pre class="md-pre"' + (lang ? ' data-lang="' + esc(lang) + '"' : '') + '><code>' +
+               esc(body.join('\n')) + '</code></pre>';
+        continue;
+      }
+
+      // GFM table: header row, delimiter row, then body rows
+      if (/^\s*\|/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+        closeLists(0);
+        var cells = function (l) {
+          return l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|')
+            .map(function (c) { return mdInline(esc(c.trim())); });
+        };
+        var head = cells(line);
+        i += 2;
+        var rows = [];
+        while (i < lines.length && /^\s*\|/.test(lines[i])) { rows.push(cells(lines[i])); i++; }
+        out += '<div class="md-table-wrap"><table class="md-table"><thead><tr>' +
+               head.map(function (c) { return '<th>' + c + '</th>'; }).join('') + '</tr></thead><tbody>' +
+               rows.map(function (r) {
+                 return '<tr>' + r.map(function (c) { return '<td>' + c + '</td>'; }).join('') + '</tr>';
+               }).join('') + '</tbody></table></div>';
+        continue;
+      }
+
+      // headings
+      var h = line.match(/^(#{1,6})\s+(.*)$/);
+      if (h) {
+        closeLists(0);
+        var lvl = Math.min(6, h[1].length);
+        out += '<h' + lvl + ' class="md-h md-h' + lvl + '">' + mdInline(esc(h[2])) + '</h' + lvl + '>';
+        i++; continue;
+      }
+
+      // horizontal rule
+      if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { closeLists(0); out += '<hr>'; i++; continue; }
+
+      // blockquote (collapse consecutive lines)
+      if (/^\s*>/.test(line)) {
+        closeLists(0);
+        var quote = [];
+        while (i < lines.length && /^\s*>/.test(lines[i])) { quote.push(lines[i].replace(/^\s*>\s?/, '')); i++; }
+        out += '<blockquote class="md-quote">' + mdLite(quote.join('\n')) + '</blockquote>';
+        continue;
+      }
+
+      // list item (task checkbox, bullet or ordered), with nesting by indent
+      var li = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
+      if (li) {
+        var indent = Math.floor(li[1].length / 2);
+        var ordered = /^\d/.test(li[2]);
+        var tag = ordered ? 'ol' : 'ul';
+        var item = li[3];
+        var box = item.match(/^\[([ xX])\]\s*(.*)$/);
+        var isTask = !!box;
+        closeLists(indent);
+        while (listStack.length > indent) { out += '</' + listStack.pop().tag + '>'; }
+        if (listStack.length === indent) {
+          listStack.push({ tag: tag, task: isTask });
+          out += '<' + tag + ' class="md-list' + (isTask ? ' md-task-list' : '') + '">';
+        }
+        var cls = 'md-li';
+        if (isTask) cls += box[1].trim() === '' ? ' md-task-open' : ' md-task-done';
+        out += '<li class="' + cls + '"' + (ordered ? ' value="' + li[2].replace(/[.)]$/, '') + '"' : '') + '>' +
+               (isTask ? '<span class="md-check" aria-hidden="true">' + (box[1].trim() === '' ? '' : '✓') + '</span>' : '') +
+               mdInline(esc(isTask ? box[2] : item)) + '</li>';
+        i++; continue;
+      }
+
+      // blank line / paragraph
+      closeLists(0);
+      if (line.trim() === '') { i++; continue; }
+      out += '<p class="md-p">' + mdInline(esc(line)) + '</p>';
+      i++;
+    }
+    closeLists(0);
     return out;
   }
 
@@ -810,6 +966,121 @@ __RALPH_STATE__
     el.innerHTML = mdLite(st.patterns_md);
   }
 
+  /* ---------------------------------------------------------- PRD documents ---
+     Metadata (title, story count, checkbox progress) rides in the polled state; the
+     document text is fetched only when a document is opened, because a real tasks/
+     directory can hold hundreds of KB and this page re-reads state every 2s. */
+
+  var docSel = null;                     // path of the open document
+  var docCache = {};                     // path -> { text, bytes, truncated } | { error }
+  var docSeq = 0;                        // guards against an out-of-order fetch
+
+  function selectDoc(path) {
+    docSel = path;
+    renderDocs(state);
+  }
+
+  function fetchDoc(path, st) {
+    if (docCache[path]) return;
+    var doc = ((st.docs || {}).items || []).filter(function (d) { return d.path === path; })[0];
+    if (doc && typeof doc.content === 'string') {       // embedded (snapshot / fragment)
+      docCache[path] = { text: doc.content, bytes: doc.bytes, truncated: false };
+      renderDocs(st);
+      return;
+    }
+    if (isFile) {                                       // no server to ask
+      docCache[path] = { error: '快照里没有内嵌这篇文档（超过内嵌上限，或生成快照时未开启内嵌）。请在项目里起看板服务后查看。' };
+      renderDocs(st);
+      return;
+    }
+    var seq = ++docSeq;
+    docCache[path] = { loading: true };
+    renderDocs(st);
+    fetch('/api/doc?path=' + encodeURIComponent(path), { cache: 'no-store' })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (seq !== docSeq) return;
+        if (!res.ok) throw new Error(res.j.error || ('HTTP ' + res.ok));
+        docCache[path] = { text: res.j.content, bytes: res.j.bytes, truncated: res.j.truncated };
+        renderDocs(state);
+      })
+      .catch(function (e) {
+        if (seq !== docSeq) return;
+        docCache[path] = { error: '读取失败：' + (e && e.message ? e.message : e) };
+        renderDocs(state);
+      });
+  }
+
+  function renderDocs(st) {
+    var list = $('doc-list'), body = $('doc-body'), head = $('doc-head'), hint = $('docs-hint');
+    var docs = ((st.docs || {}).items) || [];
+    var dir = (st.docs || {}).dir || '';
+    if (!docs.length) {
+      hint.textContent = '';
+      head.hidden = true;
+      list.innerHTML = '';
+      body.className = 'doc-body';
+      body.innerHTML = '<div class="doc-missing">' +
+        (st.prd ? 'tasks/ 目录下还没有 PRD 文档。<code>/prd</code> 会把新文档写到那里。'
+                : '还没有任务文件。<code>/prd</code> 生成 PRD，<code>/ralph</code> 转成 prd.json，然后 <code>/ralph-run</code> 启动循环。') +
+        '</div>';
+      return;
+    }
+    var srcCount = ((st.docs || {}).sources || []).length;
+    hint.textContent = docs.length + ' 篇' + (srcCount ? ' · ' + srcCount + ' 篇是当前 prd.json 的来源' : '');
+
+    if (!docSel || !docs.some(function (d) { return d.path === docSel; })) {
+      var src = ((st.docs || {}).sources || [])[0];
+      docSel = (src && src.path) || docs[0].path;
+    }
+
+    var sig = docs.map(function (d) {
+      return [d.path, d.bytes, d.mtime, d.matches_prd_json, d.stories, d.checkboxes.checked, d.checkboxes.total].join(':');
+    }).join('|') + '@' + docSel;
+    if (changed('docs', sig)) {
+      list.innerHTML = docs.map(function (d) {
+        var cb = d.checkboxes;
+        return '<button type="button" class="doc-item' + (d.path === docSel ? ' sel' : '') + '" data-doc="' + esc(d.path) + '">' +
+          '<span class="fn">' + esc(d.file) + '</span>' +
+          '<span class="ti">' + esc(d.title) + '</span>' +
+          '<span class="mt">' +
+            (d.is_prd ? '<span>' + d.stories + ' 个故事</span>' : '<span>非 PRD</span>') +
+            (cb.total ? '<span>' + cb.checked + '/' + cb.total + ' 项</span>' : '') +
+            '<span>' + Math.max(1, Math.round(d.bytes / 1024)) + ' KB</span>' +
+            (d.matches_prd_json > 0 ? '<span class="src">来源文档</span>' : '') +
+          '</span>' +
+        '</button>';
+      }).join('');
+    }
+
+    var doc = docs.filter(function (d) { return d.path === docSel; })[0];
+    var cached = docCache[docSel];
+    if (!cached) { fetchDoc(docSel, st); return; }
+
+    head.hidden = false;
+    head.innerHTML = '<span class="fn">' + esc(doc.path) + '</span>' +
+      '<span class="meta">' + Math.max(1, Math.round(doc.bytes / 1024)) + ' KB' +
+      (doc.mtime_iso ? ' · ' + esc(doc.mtime_iso.slice(0, 16).replace('T', ' ')) : '') +
+      (doc.checkboxes.total ? ' · ' + doc.checkboxes.checked + '/' + doc.checkboxes.total + ' 项已完成' : '') +
+      (doc.matches_prd_json > 0 ? ' · 当前 prd.json 的来源之一' : ' · 未被当前 prd.json 引用') +
+      '</span>';
+
+    var bodySig = [docSel, cached.loading ? 'l' : cached.error ? 'e' : (cached.text || '').length, cached.bytes, cached.truncated ? 't' : ''].join(':');
+    if (!changed('docBody', bodySig)) return;
+
+    if (cached.loading) {
+      body.className = 'doc-body';
+      body.innerHTML = '<div class="doc-missing">正在读取…</div>';
+    } else if (cached.error) {
+      body.className = 'doc-body';
+      body.innerHTML = '<div class="doc-missing">' + esc(cached.error) + '</div>';
+    } else {
+      body.className = 'doc-body' + (cached.truncated ? ' content-missing' : '');
+      body.innerHTML = '<div class="md-body">' + mdLite(cached.text) + '</div>' +
+        (cached.truncated ? '<div class="doc-missing">文档过大，只显示前 ' + Math.round(cached.bytes / 1024) + ' KB（完整内容见 <code>' + esc(doc.path) + '</code>）。</div>' : '');
+    }
+  }
+
   function renderArchive(st) {
     var el = $('archive'), runs = st.archive || [];
     if (!changed('archive', runs.map(function (r) { return r.dir + r.done + '/' + r.total + (r.has_prd ? 'p' : ''); }).join('|') || 'empty')) return;
@@ -871,6 +1142,7 @@ __RALPH_STATE__
     renderCommits(state);
     renderBoard(state);
     renderPatterns(state);
+    renderDocs(state);
     renderArchive(state);
     document.title = (state.prd && state.prd.project ? state.prd.project + ' · ' : '') + 'Ralph 看板' +
       (state.loop && state.loop.stage_label ? ' · ' + state.loop.stage_label : '');
@@ -905,6 +1177,12 @@ __RALPH_STATE__
   $('manual').addEventListener('click', function () { if (isFile) { location.reload(); } else { refresh(); } });
 
   // clicking an iteration or a story keeps the two views linked
+  $('doc-list').addEventListener('click', function (ev) {
+    var item = ev.target.closest ? ev.target.closest('.doc-item') : null;
+    if (!item) return;
+    selectDoc(item.getAttribute('data-doc'));
+  });
+
   $('timeline').addEventListener('click', function (ev) {
     var t = ev.target.closest ? ev.target.closest('.tl') : null;
     if (!t) return;

@@ -4,7 +4,7 @@
     {
       "name": "ralph",
       "source": "./",
-      "version": "2.1.2",
+      "version": "2.2.0",
       "description": "Ralph autonomous agent loop for ZCode: generate a PRD, convert it to prd.json user stories, then let each fresh-context iteration implement exactly one story, run the project's checks, commit, and append learnings to progress.txt — with a read-only local dashboard for story status and live loop progress",
       "displayName": "Ralph 自主开发循环",
       "displayName_i18n": {

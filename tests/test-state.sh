@@ -60,6 +60,53 @@ chk "多次运行：start/end 各自配对（每轮都有结束时间）" \
   "$(printf '%s' "$MR" | jq -r '[.iterations[]|select(.ended == null)]|length')" "1"
 
 echo
+echo "===== PRD 文档索引（tasks/）====="
+DOCS_PROJ="$D/docsproj"
+rm -rf "$DOCS_PROJ"; mkdir -p "$DOCS_PROJ/tasks"
+cp "$FIX/proj-running/prd.json" "$DOCS_PROJ/prd.json"
+cat > "$DOCS_PROJ/tasks/prd-task-priority.md" <<'MD'
+# PRD: Task Priority System
+
+### US-001: Add priority field to database
+
+- [x] Add priority column
+- [ ] Typecheck passes
+MD
+cat > "$DOCS_PROJ/tasks/prd-other.md" <<'MD'
+# PRD: Unrelated Feature
+
+### ZZ-009: Nothing shared
+
+- [ ] Do the other thing
+MD
+printf '# Just notes\n\nNo stories.\n' > "$DOCS_PROJ/tasks/notes.md"
+OUT="$(run "$DOCS_PROJ")"
+chk "文档：列出 tasks/ 下的 md" "$(printf '%s' "$OUT" | jq -r '.docs.count')" "3"
+chk "文档：识别出是当前 prd.json 来源的那篇" \
+  "$(printf '%s' "$OUT" | jq -r '.docs.sources | length')" "1"
+chk "文档：来源文档路径正确" \
+  "$(printf '%s' "$OUT" | jq -r '.docs.sources[0].path')" "tasks/prd-task-priority.md"
+chk "文档：标题命中数（用标题而非 id 判定来源）" \
+  "$(printf '%s' "$OUT" | jq -r '.docs.sources[0].matched')" "1"
+chk "文档：非来源的 PRD 不计入 sources" \
+  "$(printf '%s' "$OUT" | jq -r '[.docs.sources[]|select(.file=="prd-other.md")]|length')" "0"
+chk "文档：统计复选框进度" \
+  "$(printf '%s' "$OUT" | jq -r '.docs.items[]|select(.file=="prd-task-priority.md")|"\(.checkboxes.checked)/\(.checkboxes.total)"')" "1/2"
+chk "文档：非 PRD 文档被标出" \
+  "$(printf '%s' "$OUT" | jq -r '.docs.items[]|select(.file=="notes.md")|.is_prd')" "false"
+chk "文档：标题取自一级标题" \
+  "$(printf '%s' "$OUT" | jq -r '.docs.items[]|select(.file=="notes.md")|.title')" "Just notes"
+chk "文档：默认不内嵌正文（轮询负载保持轻量）" \
+  "$(printf '%s' "$OUT" | jq -r '[.docs.items[]|select(has("content"))]|length')" "0"
+OUT2="$(bash "$STATE" --dir "$DOCS_PROJ" --compact --docs-content 100000)"
+chk "文档：--docs-content 时内嵌正文" \
+  "$(printf '%s' "$OUT2" | jq -r '[.docs.items[]|select(has("content"))]|length')" "3"
+chk "文档：内嵌正文内容正确" \
+  "$(printf '%s' "$OUT2" | jq -r '.docs.items[]|select(.file=="notes.md")|.content|test("No stories")')" "true"
+chk "文档：超过 --docs-content 上限的不内嵌" \
+  "$(bash "$STATE" --dir "$DOCS_PROJ" --compact --docs-content 10 | jq -r '[.docs.items[]|select(has("content"))]|length')" "0"
+
+echo
 echo "===== 降级输入 ====="
 rm -rf "$D"; mkdir -p "$D/noprj" "$D/badprd" "$D/plain" "$D/emptyrepo" "$D/badevents/.ralph" "$D/noprogress"
 printf 'not json {{{ \n' > "$D/badprd/prd.json"

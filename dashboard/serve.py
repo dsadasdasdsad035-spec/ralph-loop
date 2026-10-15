@@ -28,6 +28,7 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import unquote
 
 HERE = Path(__file__).resolve().parent
 PLUGIN_ROOT = HERE.parent
@@ -35,6 +36,8 @@ INDEX = HERE / "index.html"
 STATE_SCRIPT = PLUGIN_ROOT / "scripts" / "ralph-state.sh"
 PLACEHOLDER = "__RALPH_STATE__"
 STATE_TIMEOUT = 30.0
+DOC_TIMEOUT = 15.0
+DOC_MAX_BYTES = 2_000_000          # hard cap on a single document response
 ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
 
 
@@ -67,6 +70,34 @@ def read_state(project_dir: str) -> tuple[str, str | None]:
         return compact_json(stdout), None
     except json.JSONDecodeError as exc:
         return "", f"state extractor produced invalid JSON: {exc}"
+
+
+def read_document(project_dir: str, rel_path: str) -> tuple[dict | None, str | None]:
+    """Read one PRD document from <project>/tasks/.
+
+    The requested path is resolved and then checked to be inside tasks/ — a document
+    viewer is exactly the kind of route that turns into an arbitrary-file read if the
+    path is trusted. Only .md/.markdown files are served.
+    """
+    docs_root = Path(project_dir) / "tasks"
+    candidate = (Path(project_dir) / rel_path).resolve()
+    try:
+        real_root = docs_root.resolve()
+    except OSError:
+        return None, "tasks directory is unavailable"
+    if not str(candidate).startswith(str(real_root) + os.sep):
+        return None, "path escapes the tasks directory"
+    if candidate.suffix.lower() not in (".md", ".markdown"):
+        return None, "only .md / .markdown documents are served"
+    if not candidate.is_file():
+        return None, "document not found"
+    try:
+        size = candidate.stat().st_size
+        raw = candidate.read_bytes()[:DOC_MAX_BYTES]
+    except OSError as exc:
+        return None, f"could not read the document: {exc}"
+    text = raw.decode("utf-8", errors="replace")
+    return {"path": rel_path, "bytes": len(raw), "truncated": size > len(raw), "content": text}, None
 
 
 def error_state(project_dir: str, message: str) -> str:
@@ -140,11 +171,30 @@ class Handler(BaseHTTPRequestHandler):
             self._send(state_json.encode("utf-8"), "application/json; charset=utf-8")
             return
 
+        if path == "/api/doc":
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            wanted = ""
+            for pair in query.split("&"):
+                if pair.startswith("path="):
+                    wanted = unquote(pair[len("path="):])
+                    break
+            if not wanted:
+                self._send(b'{"error":"missing ?path="}', "application/json; charset=utf-8", 400)
+                return
+            doc, derr = read_document(self.project_dir, wanted)
+            if derr:
+                payload = json.dumps({"error": derr}, ensure_ascii=False)
+                self._send(payload.encode("utf-8"), "application/json; charset=utf-8", 404)
+                return
+            payload = json.dumps(doc, ensure_ascii=False)
+            self._send(payload.encode("utf-8"), "application/json; charset=utf-8")
+            return
+
         if path == "/healthz":
             self._send(b'{"ok":true}', "application/json; charset=utf-8")
             return
 
-        self._send("not found. routes: / , /api/state , /healthz".encode(), "text/plain; charset=utf-8", 404)
+        self._send("not found. routes: / , /api/state , /api/doc , /healthz".encode(), "text/plain; charset=utf-8", 404)
 
 
 def pick_port(host: str, want: int, tries: int = 20) -> int:

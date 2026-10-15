@@ -8,6 +8,7 @@
 #   git status            dirty working tree (a story is mid-implementation)
 #   .ralph/events.jsonl   precise stage events written by the loop drivers
 #   archive/*/            completed previous runs
+#   tasks/*.md            PRD documents: index metadata always, full text on request
 #
 # Read-only: it never writes inside the project. The local server, the snapshot
 # export and the in-session fragment all render what this prints, so the page
@@ -15,7 +16,11 @@
 #
 # Usage:
 #   ralph-state.sh [--dir DIR] [--prd FILE] [--progress FILE] [--events FILE]
-#                  [--archive DIR] [--compact]
+#                  [--archive DIR] [--docs-dir DIR] [--docs-content N] [--compact]
+#
+# PRD documents are indexed by metadata only (a real project's tasks/ can hold
+# hundreds of KB); --docs-content N additionally embeds up to N bytes per document
+# so a snapshot or an in-session fragment can render them offline.
 #
 # Exit status is 0 whenever a JSON document was produced — degraded states
 # (no PRD, invalid PRD, not a git repo, no events yet) are reported inside the
@@ -30,6 +35,8 @@ PRD_FILE=""
 PROGRESS_FILE=""
 EVENTS_FILE=""
 ARCHIVE_DIR=""
+DOCS_DIR=""
+DOCS_CONTENT=0
 PRETTY=true
 
 die() { echo "Error: $*" >&2; exit 1; }
@@ -46,6 +53,10 @@ while [[ $# -gt 0 ]]; do
     --events=*) EVENTS_FILE="${1#*=}"; shift ;;
     --archive) ARCHIVE_DIR="${2:-}"; shift 2 ;;
     --archive=*) ARCHIVE_DIR="${1#*=}"; shift ;;
+    --docs-dir) DOCS_DIR="${2:-}"; shift 2 ;;
+    --docs-dir=*) DOCS_DIR="${1#*=}"; shift ;;
+    --docs-content) DOCS_CONTENT="${2:-0}"; shift 2 ;;
+    --docs-content=*) DOCS_CONTENT="${1#*=}"; shift ;;
     --compact) PRETTY=false; shift ;;
     -h|--help) sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1 (see --help)" ;;
@@ -60,6 +71,8 @@ PRD_FILE="${PRD_FILE:-$PROJECT_DIR/prd.json}"
 PROGRESS_FILE="${PROGRESS_FILE:-$PROJECT_DIR/progress.txt}"
 EVENTS_FILE="${EVENTS_FILE:-$PROJECT_DIR/.ralph/events.jsonl}"
 ARCHIVE_DIR="${ARCHIVE_DIR:-$PROJECT_DIR/archive}"
+DOCS_DIR="${DOCS_DIR:-$PROJECT_DIR/tasks}"
+[[ "$DOCS_CONTENT" =~ ^[0-9]+$ ]] || die "--docs-content needs a byte count, got '$DOCS_CONTENT'"
 
 command -v jq >/dev/null 2>&1 || die "jq is required (brew install jq on macOS)"
 
@@ -181,6 +194,78 @@ if [[ -d "$ARCHIVE_DIR" ]]; then
   )"
 fi
 ARCHIVE_JSON="$(json_or "$ARCHIVE_JSON" '[]')"
+
+# --- PRD documents (tasks/) ---------------------------------------------------
+# Indexed by metadata only: a real tasks/ directory can hold several hundred KB, and
+# this document is re-read on every dashboard poll. --docs-content N embeds the text
+# (capped) for the snapshot/fragment paths, which cannot fetch on demand later.
+
+# Story titles from prd.json: the stable link between the JSON and its source docs.
+# (ids collide across documents; a merged prd.json even re-prefixes them.)
+PRD_TITLES_JSON='[]'
+if [[ "$PRD_USABLE" == true ]]; then
+  PRD_TITLES_JSON="$(jq -c '[.userStories[] | (.title // "")]' "$PRD_FILE" 2>/dev/null || echo '[]')"
+  PRD_TITLES_JSON="$(json_or "$PRD_TITLES_JSON" '[]')"
+fi
+
+DOCS_JSON='[]'
+if [[ -d "$DOCS_DIR" ]]; then
+  DOCS_JSON="$(
+    for f in "$DOCS_DIR"/*.md "$DOCS_DIR"/*.markdown; do
+      [[ -f "$f" ]] || continue
+      name="$(basename "$f")"
+      bytes="$(wc -c < "$f" 2>/dev/null | tr -d ' ' || echo 0)"
+      mt="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)"
+      mti="$(date -r "$mt" +"%Y-%m-%dT%H:%M:%S%z" 2>/dev/null || echo "")"
+      # Story headings (### US-001: … / ### PWT-003: …). The id prefix is NOT a reliable
+      # source marker — several documents in one tasks/ dir reuse "US-NNN" numbering —
+      # so the title (which prd.json copies verbatim) is what identifies a source doc.
+      ids="$(grep -oE '^#{2,4}[[:space:]]+[A-Za-z]+-[A-Za-z0-9_-]+' "$f" 2>/dev/null \
+             | sed -E 's/^#+[[:space:]]+//' | sort -u || true)"
+      titles="$(grep -oE '^#{2,4}[[:space:]]+[A-Za-z]+-[A-Za-z0-9_-]+:[[:space:]]*.*$' "$f" 2>/dev/null \
+                | sed -E 's/^#+[[:space:]]+[A-Za-z]+-[A-Za-z0-9_-]+:[[:space:]]*//' | sed -E 's/[[:space:]]+$//' || true)"
+      boxes="$(grep -cE '^[[:space:]]*[-*][[:space:]]+\[[ xX]\]' "$f" 2>/dev/null || true)"
+      checked="$(grep -cE '^[[:space:]]*[-*][[:space:]]+\[[xX]\]' "$f" 2>/dev/null || true)"
+      h1="$(grep -m1 -E '^#[[:space:]]+' "$f" 2>/dev/null | sed -E 's/^#[[:space:]]+//' || true)"
+      prd_heads="$(grep -cE '^#[[:space:]]+PRD' "$f" 2>/dev/null || true)"
+      # Only read the body when the caller asked for content AND this file fits the cap.
+      # (bash 3.2 with `set -u` rejects expanding an empty array, so the two cases are
+      # built as separate program strings instead of a conditional element list.)
+      if [[ "$DOCS_CONTENT" -gt 0 ]] && [[ "$bytes" -le "$DOCS_CONTENT" ]]; then
+        jq -cn --arg file "$name" --argjson bytes "${bytes:-0}" --argjson mt "${mt:-0}" \
+          --arg mti "$mti" --arg h1 "$h1" \
+          --argjson ids "$(printf '%s' "$ids" | jq -Rsc 'split("\n")|map(select(length>0))')" \
+          --argjson boxes "${boxes:-0}" --argjson checked "${checked:-0}" \
+          --argjson prd_heads "${prd_heads:-0}" --argjson prd_titles "$PRD_TITLES_JSON" \
+          --argjson titles "$(printf '%s' "$titles" | jq -Rsc 'split("\n")|map(select(length>0))')" \
+          --rawfile body "$f" '
+          { file: $file, path: ("tasks/" + $file), bytes: $bytes,
+            mtime: $mt, mtime_iso: (if $mti == "" then null else $mti end),
+            title: (if $h1 == "" then ($file | sub("\\.(md|markdown)$"; "")) else $h1 end),
+            story_ids: $ids, stories: ($ids | length),
+            is_prd: (($ids | length) > 0 or $prd_heads > 0),
+            checkboxes: { total: $boxes, checked: $checked, open: ($boxes - $checked) },
+            matches_prd_json: ([ $titles[] | select(. as $t | $prd_titles | index($t)) ] | length),
+            content: $body }'
+      else
+        jq -cn --arg file "$name" --argjson bytes "${bytes:-0}" --argjson mt "${mt:-0}" \
+          --arg mti "$mti" --arg h1 "$h1" \
+          --argjson ids "$(printf '%s' "$ids" | jq -Rsc 'split("\n")|map(select(length>0))')" \
+          --argjson boxes "${boxes:-0}" --argjson checked "${checked:-0}" \
+          --argjson prd_heads "${prd_heads:-0}" --argjson prd_titles "$PRD_TITLES_JSON" \
+          --argjson titles "$(printf '%s' "$titles" | jq -Rsc 'split("\n")|map(select(length>0))')" '
+          { file: $file, path: ("tasks/" + $file), bytes: $bytes,
+            mtime: $mt, mtime_iso: (if $mti == "" then null else $mti end),
+            title: (if $h1 == "" then ($file | sub("\\.(md|markdown)$"; "")) else $h1 end),
+            story_ids: $ids, stories: ($ids | length),
+            is_prd: (($ids | length) > 0 or $prd_heads > 0),
+            checkboxes: { total: $boxes, checked: $checked, open: ($boxes - $checked) },
+            matches_prd_json: ([ $titles[] | select(. as $t | $prd_titles | index($t)) ] | length) }'
+      fi
+    done | jq -sc 'sort_by(.mtime) | reverse' 2>/dev/null || true
+  )"
+fi
+DOCS_JSON="$(json_or "$DOCS_JSON" '[]')"
 
 ERRORS_JSON="$(printf '%s' "$ERRORS" | jq -Rsc 'split("\n") | map(select(length > 0))' 2>/dev/null || true)"
 ERRORS_JSON="$(json_or "$ERRORS_JSON" '[]')"
@@ -311,6 +396,18 @@ JQ_PROGRAM='
       iterations: $iterations,
       recent_commits: ($commits | .[0:8]),
       archive: $archive,
+      docs: {
+        dir: $docs_dir,
+        count: ($docs | length),
+        # Which documents prd.json was generated from. A single-PRD project has one;
+        # a merged prd.json has several, so this stays a list rather than one "current".
+        # Matching is on story titles, because ids are reused across documents.
+        sources: ( [ $docs[] | select(.is_prd) | select(.matches_prd_json > 0) ]
+                   | sort_by(-.matches_prd_json)
+                   | map({ path: .path, file: .file, title: .title,
+                           stories: .stories, matched: .matches_prd_json }) ),
+        items: $docs
+      },
       errors: $errors
     }
 '
@@ -327,6 +424,8 @@ OUTPUT="$(jq -n \
   --argjson dirty "$DIRTY_JSON" \
   --argjson commits "$COMMITS_JSON" \
   --argjson archive "$ARCHIVE_JSON" \
+  --argjson docs "$DOCS_JSON" \
+  --arg docs_dir "$DOCS_DIR" \
   --argjson errors "$ERRORS_JSON" \
   --slurpfile prd "$PRD_SRC" \
   --slurpfile events "$EVENTS_SRC" \

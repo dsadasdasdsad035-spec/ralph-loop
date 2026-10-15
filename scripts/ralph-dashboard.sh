@@ -76,6 +76,13 @@ fi
 
 state_json() { bash "$STATE_SCRIPT" --dir "$PROJECT_DIR" --compact; }
 
+# A standalone snapshot has no server to fetch documents from later, so the PRD texts
+# are embedded (capped) while the live service keeps them out of the polled payload.
+DOCS_EMBED_MAX=200000
+state_json_with_docs() {
+  bash "$STATE_SCRIPT" --dir "$PROJECT_DIR" --compact --docs-content "$DOCS_EMBED_MAX"
+}
+
 # --- once --------------------------------------------------------------------
 
 if [[ "$MODE" == "once" ]]; then
@@ -91,7 +98,7 @@ fi
 render_template() { # $1 = template file, $2 = destination
   local template="$1" dest="$2" state line_no dir_part base_part tmp
   [[ -f "$template" ]] || die "template missing: $template"
-  state="$(state_json)" || die "could not read project state"
+  state="$(state_json_with_docs)" || die "could not read project state"
   # `<` can only appear inside JSON strings, so escaping it globally is safe and
   # guarantees the payload cannot close the embedding <script> tag.
   state="$(printf '%s' "$state" | sed 's/</\\u003c/g')"

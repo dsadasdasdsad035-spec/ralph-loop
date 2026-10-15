@@ -76,6 +76,11 @@ bash scripts/ralph.sh --dir . --render-prompt 1  # 只渲染第 1 轮提示词
   更新 `prd.json` → 写 `progress.txt` → 还有故事？的回环图；走过的路径点亮，当前阶段脉冲，
   故事令牌停在当前节点。
 - **迭代时间线** — 每一轮的耗时与结果（绿=完成、琥珀=卡住、蓝=进行中），点一下跳到对应的故事卡。
+- **PRD 文档** — 预览 `tasks/` 下的需求文档：左侧列出全部 `.md`（标题、故事数、复选框完成度、大小），
+  右侧渲染正文（标题层级、复选框、表格、代码块、嵌套列表、引用）；并标出**哪些文档是当前
+  `prd.json` 的来源**（按故事标题匹配 —— `tasks/` 里多篇文档常各自从 `US-001` 编号，`prd.json`
+  合并后还会换前缀，所以 id 不可靠）。正文按需读取：轮询负载里只有元数据，打开哪篇取哪篇。
+  快照模式会把正文一并内嵌（单篇上限 200KB），所以离线也能看。
 - **代码库经验 / 历史运行** — `progress.txt` 的 `Codebase Patterns` 汇总，以及 `archive/` 里往次运行的完成度。
 
 准确性说明：阶段以 `.ralph/events.jsonl` 的事件为准（`ralph-run` 技能与 `ralph.sh` 都会写）。
@@ -103,11 +108,11 @@ bash tests/run-all.sh
 | `skills/ralph-run/SKILL.md` | 会话内循环编排：每轮一个全新上下文子代理，并写入阶段事件 |
 | `skills/ralph-dashboard/SKILL.md` | 看板：起服务 / 导出快照 / 会话内渲染 |
 | `scripts/ralph.sh` | 循环状态机：归档、进度初始化、提示词渲染、无头循环（`--dashboard` 可同时起看板） |
-| `scripts/ralph-state.sh` | 只读状态聚合：prd / progress / git / events / archive → 一份 JSON |
+| `scripts/ralph-state.sh` | 只读状态聚合：prd / progress / git / events / archive / tasks 文档 → 一份 JSON |
 | `scripts/ralph-dashboard.sh` | 看板入口：`--dir --port`（服务）、`--snapshot`、`--inline-fragment`、`--once`、`--stop` |
 | `scripts/ralph-event.sh` | 向 `.ralph/events.jsonl` 追加上一条阶段事件 |
 | `dashboard/index.html` | 看板页面：任务看板 + 流程视图 + 迭代时间线 + 历史运行（无外部依赖、无构建） |
-| `dashboard/serve.py` | 本地只读服务，绑定 127.0.0.1，`/api/state` 每次请求现读磁盘 |
+| `dashboard/serve.py` | 本地只读服务，绑定 127.0.0.1，`/api/state` 现读磁盘、`/api/doc` 按需取单篇 PRD（限 `tasks/` 内、仅 .md） |
 | `dashboard/inline.html` | 会话内视图的片段模板 |
 | `tests/run-all.sh` | 看板验收套件：状态提取器 / 无头集成 / 真浏览器 UI |
 | `templates/iteration-prompt.md` | 单轮迭代提示词模板（每次迭代注入给子代理/CLI 的全部指令） |

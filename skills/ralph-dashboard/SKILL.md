@@ -20,6 +20,13 @@ You do not re-implement any of this. The scripts do the work:
 | `dashboard/index.html` | The full board page (task board + live flow + timeline + archive) |
 | `dashboard/inline.html` | Fragment template for rendering the board inside a ZCode session |
 
+The board also previews the PRD documents in the project's `tasks/` directory: the
+extractor indexes them (title, story count, checkbox progress, and which ones
+`prd.json` was generated from) and `serve.py` serves their text from `/api/doc` when
+one is opened. Documents are matched to `prd.json` by **story title**, not by id —
+a `tasks/` directory commonly holds several documents that each number their stories
+`US-001…`, and a merged `prd.json` may re-prefix them.
+
 ## Step 0: Resolve paths
 
 Resolve the plugin root the same way the `ralph-run` skill does (env var
