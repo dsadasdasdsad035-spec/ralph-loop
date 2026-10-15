@@ -153,6 +153,88 @@ def board_case(pw, state, project, port, expect, shot, dark=False, live=None):
     srv.stop()
 
 
+def folds_case(pw, project, port):
+    """Regressions for the reported folding/overflow bugs.
+
+    The board re-reads the disk every 2s. Rebuilding its DOM on every poll used to
+    (a) slam any fold the user opened back shut, and (b) drop a click that landed
+    mid-rebuild. Panels were not collapsible at all, and long unbroken 备注 text
+    overflowed the card and widened the page.
+    """
+    srv = Server(project, port)
+    page = pw.chromium.launch().new_page(viewport={"width": 1560, "height": 1100})
+    attach(page, "folds")
+    page.goto(srv.url, wait_until="load")
+    page.wait_for_timeout(700)
+
+    # -- panels are collapsible ------------------------------------------------
+    panels = page.locator("details[data-fold-key^='panel:']")
+    check("折叠: 面板可折叠且数量充足", panels.count() >= 5, f"{panels.count()} 个")
+    board = page.locator("[data-fold-key='panel:board']")
+    board.locator("> summary").click(); page.wait_for_timeout(250)
+    check("折叠: 任务看板可收起", board.evaluate("el => el.open") is False)
+    board.locator("> summary").click(); page.wait_for_timeout(250)
+    check("折叠: 任务看板可再展开", board.evaluate("el => el.open") is True)
+
+    # -- an opened story fold survives idle polling ----------------------------
+    fold = page.locator(".story").first.locator("details").first
+    fold.locator("> summary").click(); page.wait_for_timeout(200)
+    check("折叠: 验收标准可展开", fold.evaluate("el => el.open") is True)
+    page.wait_for_timeout(2800)                       # > one poll cycle
+    check("折叠: 空转轮询不会收起已展开的验收标准", fold.evaluate("el => el.open") is True)
+
+    # -- the DOM is not rebuilt while the data is unchanged --------------------
+    page.evaluate("() => { window.__probe = document.querySelector('.story details'); }")
+    page.wait_for_timeout(2800)
+    same = page.evaluate("() => document.querySelector('.story details') === window.__probe")
+    check("折叠: 数据未变时不重建 DOM（否则点击会丢）", same is True)
+
+    # -- an opened fold survives a real re-render ------------------------------
+    target = page.locator(".story").nth(1).locator("details").first
+    if target.evaluate("el => el.open"):
+        target.locator("> summary").click(); page.wait_for_timeout(200)
+    target.locator("> summary").click(); page.wait_for_timeout(250)
+    key = target.get_attribute("data-fold-key")
+    check("折叠: 目标已展开（前置）", target.evaluate("el => el.open") is True, key)
+
+    src = Path(project) / "prd.json"
+    data = json.loads(src.read_text(encoding="utf-8"))
+    pending = [s for s in data["userStories"] if not s["passes"]]
+    if pending:
+        pending[0]["passes"] = True
+        src.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        done_before = len([s for s in data["userStories"] if s["passes"]])
+        for _ in range(16):
+            page.wait_for_timeout(500)
+            if page.locator(".story.done").count() >= done_before:
+                break
+        check("折叠: 数据变化确实触发了重渲染",
+              page.locator(".story.done").count() >= done_before,
+              f"done={page.locator('.story.done').count()}")
+        still = page.locator(f"[data-fold-key='{key}']").evaluate("el => el.open")
+        check("折叠: 重渲染后用户展开的折叠仍保持展开", still is True, f"{key} open={still}")
+
+    # -- long unbroken text stays inside the card ------------------------------
+    ov = page.evaluate("""() => {
+      const bad = [];
+      document.querySelectorAll('.story').forEach(card => {
+        const cb = card.getBoundingClientRect();
+        card.querySelectorAll('.row span:last-child, .desc, ul.ac li, .files li').forEach(el => {
+          const r = el.getBoundingClientRect();
+          if (r.width && (r.right > cb.right + 0.5 || r.left < cb.left - 0.5))
+            bad.push((el.textContent || '').slice(0, 40));
+        });
+      });
+      return { bad, pageOverflow: document.documentElement.scrollWidth - window.innerWidth };
+    }""")
+    check("折叠: 长备注不越出卡片边框", len(ov["bad"]) == 0, f"{len(ov['bad'])} 处越界: {ov['bad'][:2]}")
+    check("折叠: 页面无横向溢出", ov["pageOverflow"] <= 1, f"{ov['pageOverflow']}px")
+
+    page.screenshot(path=str(SHOTS / "board-folds.png"), full_page=True)
+    page.context.browser.close()
+    srv.stop()
+
+
 def find_visualize_css():
     override = os.environ.get("RALPH_VISUALIZE_CSS")
     if override and Path(override).exists():
@@ -235,6 +317,32 @@ def snapshot_and_fragment(pw):
     browser.close()
 
 
+def build_long_notes_fixture():
+    """A project whose 备注 / 验收标准 contain pathological unbroken tokens, so the
+    overflow rule is exercised rather than assumed."""
+    proj = FIX / "proj-longnotes"
+    sh("bash", str(TESTS / "make-fixture.sh"), "running", str(proj))
+    src = proj / "prd.json"
+    data = json.loads(src.read_text(encoding="utf-8"))
+    url = ("https://intranet.example.com/very/long/path/without/any/break/opportunity/"
+           "segment/abcdefghijklmnopqrstuvwxyz0123456789/another/segment/that/keeps/going")
+    buckets = [
+        "这条备注故意写得非常长，用来检验文字是否会顶出卡片边框。中文部分应当正常折行显示。",
+        url,
+        "混合内容：" + url + " 后面还有中文继续延伸以确认换行规则生效。",
+    ]
+    stories = data["userStories"]
+    for s, note in zip(stories, buckets):
+        s["notes"] = note
+    # an unbroken token inside an acceptance criterion too
+    if stories and stories[0].get("acceptanceCriteria"):
+        stories[0]["acceptanceCriteria"] = list(stories[0]["acceptanceCriteria"]) + [
+            "See " + url + " for the exact contract"
+        ]
+    src.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return proj
+
+
 def main():
     build_fixtures()
     base = int(os.environ.get("RALPH_TEST_PORT", "7911"))
@@ -256,6 +364,7 @@ def main():
         board_case(pw, "no-prd", str(FIX / "degraded" / "noprj"), base + 3, {
             "text": ["还没有 prd.json", "/ralph-run", "prd.json not found"], "selectors": {".empty": "any"},
         }, "board-empty.png")
+        folds_case(pw, str(build_long_notes_fixture()), base + 4)
         snapshot_and_fragment(pw)
 
     real = [e for e in console_errors if "favicon" not in e]

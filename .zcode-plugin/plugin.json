@@ -5,7 +5,7 @@
     "en": "Ralph Autonomous Loop",
     "zh-CN": "Ralph 自主开发循环"
   },
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Ralph autonomous agent loop for ZCode: generate a PRD, convert it to prd.json user stories, then let each fresh-context iteration implement exactly one story, run the project's checks, commit, and append learnings to progress.txt — with a read-only local dashboard for story status and live loop progress",
   "description_i18n": {
     "en": "Ralph autonomous agent loop for ZCode: generate a PRD, convert it to prd.json user stories, then let each fresh-context iteration implement exactly one story, run the project's checks, commit, and append learnings to progress.txt — with a read-only local dashboard for story status and live loop progress",

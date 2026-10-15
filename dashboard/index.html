@@ -101,9 +101,21 @@
   @media (max-width: 1080px) { .grid { grid-template-columns: minmax(0, 1fr); } .kpis { grid-template-columns: 1fr 1fr; } }
   .panel { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px 15px; box-shadow: var(--shadow); min-width: 0; }
   .panel + .panel { margin-top: 14px; }
-  .panel h2 { font-size: 13px; margin: 0 0 10px; font-weight: 600; letter-spacing: .02em; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-  .panel h2 .hint { font-weight: 400; color: var(--muted); font-size: 12px; }
+  /* Panels are <details> so each one collapses; the summary carries the heading
+     styling, and the caret rotates instead of swapping glyphs. */
+  .panel-head { font-size: 13px; margin: 0 0 10px; font-weight: 600; letter-spacing: .02em; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; cursor: pointer; list-style: none; }
+  .panel-head::-webkit-details-marker { display: none; }
+  .panel-head:hover { color: var(--blue); }
+  .panel-head .caret { color: var(--faint); font-size: 9px; flex: none; transition: transform .15s ease; }
+  details.panel:not([open]) > .panel-head { margin-bottom: 0; }
+  details.panel[open] > .panel-head .caret { transform: rotate(90deg); }
+  .panel-head .hint { font-weight: 400; color: var(--muted); font-size: 12px; }
   .panel h3 { font-size: 12.5px; margin: 16px 0 8px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
+  /* Long unbroken tokens (URLs, paths, hashes) must wrap inside the card instead of
+     pushing past its border and widening the page. */
+  .story .desc, .story .row, .story ul.ac li, details.fold .body, .pend,
+  .commits .subj, .archive-run .desc { overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
+  .story .row > span:last-child, .files li > span:first-child { min-width: 0; }
 
   /* ---------- flow ---------- */
   .flow-wrap { overflow-x: auto; }
@@ -240,8 +252,8 @@
 
   <div class="grid">
     <div>
-      <section class="panel">
-        <h2>流程视图 <span class="hint" id="flow-hint"></span></h2>
+      <details class="panel" open data-fold-key="panel:flow">
+        <summary class="panel-head"><span class="caret">▸</span><span role="heading" aria-level="2">流程视图</span> <span class="hint" id="flow-hint"></span></summary>
         <div class="flow-wrap">
           <svg id="flow" viewBox="0 0 780 745" role="img" aria-label="Ralph 循环流程图：写 PRD → 转 prd.json → 启动循环 → 挑故事 → 实现 → 跑检查 → 提交 → 更新 prd.json → 写 progress.txt → 判断是否还有故事 → 完成"></svg>
         </div>
@@ -253,35 +265,36 @@
             <p>阶段判定优先使用循环写入的 <code>.ralph/events.jsonl</code> 事件；没有事件日志时（旧版本跑出的项目）回退为「最新提交 + prd.json 状态」的推断，此时标题栏会标注「推断」。子代理正在跑的时候，实现与检查两步无法从磁盘区分，统一显示为「实现中」。</p>
           </div>
         </details>
-      </section>
+      </details>
 
-      <section class="panel">
-        <h2>迭代时间线 <span class="hint" id="timeline-hint"></span></h2>
+      <details class="panel" open data-fold-key="panel:timeline">
+        <summary class="panel-head"><span class="caret">▸</span><span role="heading" aria-level="2">迭代时间线</span> <span class="hint" id="timeline-hint"></span></summary>
         <div class="timeline" id="timeline"></div>
-      </section>
+      </details>
 
-      <section class="panel">
-        <h2>最近提交 <span class="hint">当前分支</span></h2>
+      <details class="panel" open data-fold-key="panel:commits">
+        <summary class="panel-head"><span class="caret">▸</span><span role="heading" aria-level="2">最近提交</span> <span class="hint">当前分支</span></summary>
         <ul class="commits" id="commits"></ul>
-      </section>
+      </details>
     </div>
 
     <div>
-      <section class="panel">
-        <h2>任务看板 <span class="hint" id="board-hint"></span></h2>
+      <details class="panel" open data-fold-key="panel:board">
+        <summary class="panel-head"><span class="caret">▸</span><span role="heading" aria-level="2">任务看板</span> <span class="hint" id="board-hint"></span></summary>
         <div class="board" id="board"></div>
-      </section>
+      </details>
 
-      <section class="panel">
-        <details class="fold" id="patterns-fold">
+      <details class="panel" open data-fold-key="panel:archive">
+        <summary class="panel-head"><span class="caret">▸</span><span role="heading" aria-level="2">经验与历史</span></summary>
+        <details class="fold" id="patterns-fold" data-fold-key="panel:patterns">
           <summary>代码库经验（progress.txt 的 Codebase Patterns）</summary>
           <div class="body" id="patterns"></div>
         </details>
-        <details class="fold" id="archive-fold">
+        <details class="fold" id="archive-fold" data-fold-key="panel:archive-runs">
           <summary>历史运行（archive/）</summary>
           <div class="body" id="archive"></div>
         </details>
-      </section>
+      </details>
     </div>
   </div>
 
@@ -350,6 +363,53 @@ __RALPH_STATE__
     }
     if (inList) out += '</ul>';
     return out;
+  }
+
+  /* ---------------------------------------------------------- fold state ---
+     Panels and story folds are <details>. Re-rendering replaces that markup, which
+     would slam every fold the user opened back shut (and drop a click that lands
+     while the nodes are being swapped). So: remember what is open before a rebuild,
+     restore it in the new markup, and skip the rebuild entirely when the data the
+     board depends on has not actually changed. */
+
+  var folds = {};                       // fold key -> open(bool), survives rebuilds
+
+  function foldAttrs(key, dflt) {
+    var open = Object.prototype.hasOwnProperty.call(folds, key) ? folds[key] : dflt;
+    return ' data-fold-key="' + esc(key) + '"' + (open ? ' open' : '');
+  }
+
+  function rememberFolds() {
+    var els = document.querySelectorAll('[data-fold-key]');
+    for (var i = 0; i < els.length; i++) {
+      folds[els[i].getAttribute('data-fold-key')] = els[i].open;
+    }
+  }
+
+  // Per-region fingerprints. A region whose data is identical to last time is left
+  // alone, so the browser keeps the user's open folds, text selection, focus and any
+  // in-flight click instead of having its nodes swapped underneath them.
+  var sigs = {};
+  function changed(region, value) {
+    var sig = typeof value === 'string' ? value : JSON.stringify(value);
+    if (sigs[region] === sig) return false;
+    sigs[region] = sig;
+    return true;
+  }
+
+  // Cheap fingerprint of everything the board renders. Equal signature → leave the
+  // DOM (and therefore the user's open folds) exactly as it is.
+  function boardSignature(st) {
+    if (!st.prd) return 'noprd|' + (st.errors || []).join('~');
+    var loop = st.loop || {};
+    var parts = [st.prd.counts.done, st.prd.counts.total, loop.stage, loop.story || '',
+                 loop.stage_label || ''];
+    (st.prd.stories || []).forEach(function (s) {
+      parts.push([s.id, s.passes ? 1 : 0, s.priority, s.title, (s.notes || '').length,
+                  s.commit ? s.commit.short : '-', (s.progress || []).length].join(':'));
+    });
+    parts.push(st.project.dirty ? 'dirty=' + (st.project.dirty_files || []).length : 'clean');
+    return parts.join('|');
   }
 
   /* ------------------------------------------------------------------ flow */
@@ -579,11 +639,17 @@ __RALPH_STATE__
     return { cls: 'todo', label: '待办' };
   }
 
+  var boardSig = null;
+
   function renderBoard(st) {
     var prd = st.prd, el = $('board'), hint = $('board-hint');
     if (!prd) {
       hint.textContent = '';
       $('kpis').innerHTML = '';
+      var sig = boardSignature(st);
+      if (sig === boardSig) return;
+      boardSig = sig;
+      rememberFolds();
       el.innerHTML =
         '<div class="empty">' +
         '<h2>还没有 prd.json</h2>' +
@@ -599,10 +665,15 @@ __RALPH_STATE__
     }
     hint.textContent = '共 ' + prd.counts.total + ' 个故事 · 按优先级排序 · 点开可看验收标准与提交';
 
+    var sig2 = boardSignature(st);
+    if (sig2 === boardSig) return;      // nothing changed: keep the DOM, keep the folds
+    boardSig = sig2;
+    rememberFolds();
+
     var html = '';
     prd.stories.forEach(function (s) {
       var stt = storyStatus(st, s);
-      var open = (s.id === (st.loop || {}).story) || stt.cls === 'blocked';
+      var primary = (s.id === (st.loop || {}).story) || stt.cls === 'blocked';
       html += '<article class="story ' + stt.cls + '" id="story-' + esc(s.id) + '">' +
         '<div class="head">' +
           '<span class="id">' + esc(s.id) + '</span>' +
@@ -611,11 +682,13 @@ __RALPH_STATE__
           '<span class="badge pri">P' + esc(s.priority) + '</span>' +
         '</div>';
       if (s.description) html += '<div class="desc">' + esc(s.description) + '</div>';
-      html += '<details class="fold"' + (open ? ' open' : '') + '><summary>验收标准（' + (s.acceptanceCriteria || []).length + '）</summary><div class="body"><ul class="ac">' +
+      html += '<details class="fold"' + foldAttrs(s.id + '::ac', primary) + '>' +
+        '<summary>验收标准（' + (s.acceptanceCriteria || []).length + '）</summary><div class="body"><ul class="ac">' +
         (s.acceptanceCriteria || []).map(function (a) { return '<li>' + esc(a) + '</li>'; }).join('') +
         '</ul></div></details>';
       if (s.commit) {
-        html += '<details class="fold"><summary>提交 <span class="commit-chip">' + esc(s.commit.short) + '</span></summary><div class="body">' +
+        html += '<details class="fold"' + foldAttrs(s.id + '::commit', false) + '>' +
+          '<summary>提交 <span class="commit-chip">' + esc(s.commit.short) + '</span></summary><div class="body">' +
           '<p>' + esc(s.commit.subject) + '</p>' +
           (s.commit.files && s.commit.files.length
             ? '<ul class="files">' + s.commit.files.map(function (f) {
@@ -629,7 +702,8 @@ __RALPH_STATE__
       if (s.notes) html += '<div class="row"><span class="k">备注</span><span>' + esc(s.notes) + '</span></div>';
       var entries = s.progress || [];
       if (entries.length) {
-        html += '<details class="fold"' + (open ? ' open' : '') + '><summary>进度记录（' + entries.length + ' 次尝试）</summary><div class="body">' +
+        html += '<details class="fold"' + foldAttrs(s.id + '::progress', primary) + '>' +
+          '<summary>进度记录（' + entries.length + ' 次尝试）</summary><div class="body">' +
           entries.map(function (p, i) {
             return '<div class="pend">' + (entries.length > 1 || i > 0 ? '<div class="pts">第 ' + (i + 1) + ' 次 · ' + esc(p.ts) + '</div>' : '<div class="pts">' + esc(p.ts) + '</div>') +
               mdLite(p.body) + '</div>';
@@ -651,11 +725,17 @@ __RALPH_STATE__
   function renderTimeline(st) {
     var el = $('timeline'), hint = $('timeline-hint'), its = st.iterations || [];
     if (!its.length) {
-      el.innerHTML = '<div class="empty">还没有迭代记录。循环开始前会先写入 <code>.ralph/events.jsonl</code>；旧版本跑出的项目只能看到 progress.txt 里的文字记录。</div>';
+      if (!changed('timeline', 'empty')) return;
       hint.textContent = '';
+      el.innerHTML = '<div class="empty">还没有迭代记录。循环开始前会先写入 <code>.ralph/events.jsonl</code>；旧版本跑出的项目只能看到 progress.txt 里的文字记录。</div>';
       return;
     }
     hint.textContent = its.length + ' 轮';
+    // Only the settled facts go in the fingerprint: an in-flight iteration's live
+    // duration changes every tick and must not force a rebuild of clickable nodes.
+    var fp = its.map(function (it) { return [it.n, it.story, it.status, it.ended_epoch].join(':'); }).join('|')
+           + '#' + (st.loop && st.loop.running ? st.loop.iteration : '-');
+    if (!changed('timeline', fp)) return;
     var now = st.now_epoch;
     el.innerHTML = its.map(function (it) {
       var end = it.ended_epoch || (st.loop && st.loop.running && (st.loop.iteration === it.n) ? now : null);
@@ -674,6 +754,7 @@ __RALPH_STATE__
 
   function renderCommits(st) {
     var el = $('commits'), cs = st.recent_commits || [];
+    if (!changed('commits', cs.map(function (c) { return c.short + c.subject; }).join('|') || 'empty')) return;
     if (!cs.length) { el.innerHTML = '<li class="empty" style="color:var(--muted)">没有提交记录</li>'; return; }
     el.innerHTML = cs.map(function (c) {
       var t = dt(c.ts);
@@ -684,6 +765,7 @@ __RALPH_STATE__
 
   function renderPatterns(st) {
     var el = $('patterns');
+    if (!changed('patterns', st.patterns_md || 'empty')) return;
     if (!st.patterns_md) {
       el.innerHTML = '<p>progress.txt 里还没有 Codebase Patterns 段落。循环跑起来之后，每轮迭代会把它发现的可复用模式写进去。</p>';
       return;
@@ -693,6 +775,7 @@ __RALPH_STATE__
 
   function renderArchive(st) {
     var el = $('archive'), runs = st.archive || [];
+    if (!changed('archive', runs.map(function (r) { return r.dir + r.done + '/' + r.total + (r.has_prd ? 'p' : ''); }).join('|') || 'empty')) return;
     if (!runs.length) { el.innerHTML = '<p>archive/ 里还没有历史运行。切换 PRD（branchName 变化）时，上一轮运行会被自动归档到这里。</p>'; return; }
     el.innerHTML = runs.map(function (r) {
       var pct = r.total ? Math.round(100 * r.done / r.total) : 0;
