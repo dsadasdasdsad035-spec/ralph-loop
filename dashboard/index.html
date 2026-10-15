@@ -168,6 +168,12 @@
   .tl.blocked { border-left-color: var(--amber); background: var(--amber-bg); }
   .tl.running { border-left-color: var(--blue); background: var(--blue-bg); animation: breathe 2.2s ease-in-out infinite; }
   .timeline .empty { color: var(--muted); font-size: 12.5px; }
+  /* A project can be run more than once; iteration numbers restart at 1 each time,
+     so runs are grouped rather than shown as one long contradicting sequence. */
+  .tl-run-group { margin-bottom: 10px; }
+  .tl-run-group:last-child { margin-bottom: 0; }
+  .tl-run-head { font-size: 11.5px; color: var(--muted); font-weight: 600; letter-spacing: .03em; margin-bottom: 5px; display: flex; align-items: baseline; gap: 7px; }
+  .tl-run-head .tl-cur { font-weight: 400; font-size: 11px; color: var(--blue); border: 1px solid var(--blue); border-radius: 999px; padding: 0 7px; }
 
   /* ---------- board ---------- */
   .board { display: flex; flex-direction: column; gap: 10px; }
@@ -569,7 +575,11 @@ __RALPH_STATE__
 
     var hint = $('flow-hint');
     var bits = [];
-    if (loop.iteration) bits.push('第 ' + loop.iteration + ' 轮' + (loop.max_iterations ? ' / 最多 ' + loop.max_iterations : ''));
+    if (loop.iteration) {
+      var itxt = '第 ' + loop.iteration + ' 轮' + (loop.max_iterations ? ' / 最多 ' + loop.max_iterations : '');
+      if (loop.runs > 1) itxt += ' · 第 ' + loop.run + ' 次运行';
+      bits.push(itxt);
+    }
     if (loop.driver && loop.driver !== 'unknown') bits.push(loop.driver === 'headless' ? '无头驱动' : '会话内驱动');
     if (loop.source === 'inferred' && prd) bits.push('推断');
     hint.textContent = bits.join(' · ');
@@ -610,7 +620,7 @@ __RALPH_STATE__
       '<div class="kpi"><div class="k">循环状态</div>' +
         '<div class="v">' + esc(loop.stage_label || '—') + '</div>' +
         '<div class="note">' +
-          (loop.iteration ? '第 ' + loop.iteration + ' 轮' + (loop.max_iterations ? ' / 最多 ' + loop.max_iterations : '') + ' · ' : '') +
+          (loop.iteration ? '第 ' + loop.iteration + ' 轮' + (loop.max_iterations ? ' / 最多 ' + loop.max_iterations : '') + (loop.runs > 1 ? '（第 ' + loop.run + ' 次运行）' : '') + ' · ' : '') +
           (loop.last_event_age_sec != null ? '最近活动 ' + esc(rel(st.now_epoch - loop.last_event_age_sec)) : '没有运行记录') +
           (loop.source === 'inferred' ? ' · 推断' : '') +
         '</div>' +
@@ -730,24 +740,51 @@ __RALPH_STATE__
       el.innerHTML = '<div class="empty">还没有迭代记录。循环开始前会先写入 <code>.ralph/events.jsonl</code>；旧版本跑出的项目只能看到 progress.txt 里的文字记录。</div>';
       return;
     }
-    hint.textContent = its.length + ' 轮';
+    var runs = (st.loop && st.loop.runs) || 1;
+    var curRun = (st.loop && st.loop.run) || 1;
+    hint.textContent = runs > 1 ? (runs + ' 次运行 · 共 ' + its.length + ' 轮') : (its.length + ' 轮');
     // Only the settled facts go in the fingerprint: an in-flight iteration's live
     // duration changes every tick and must not force a rebuild of clickable nodes.
-    var fp = its.map(function (it) { return [it.n, it.story, it.status, it.ended_epoch].join(':'); }).join('|')
+    var fp = its.map(function (it) { return [it.run, it.n, it.story, it.status, it.ended_epoch].join(':'); }).join('|')
+           + '#' + runs + '@' + curRun
            + '#' + (st.loop && st.loop.running ? st.loop.iteration : '-');
     if (!changed('timeline', fp)) return;
     var now = st.now_epoch;
-    el.innerHTML = its.map(function (it) {
-      var end = it.ended_epoch || (st.loop && st.loop.running && (st.loop.iteration === it.n) ? now : null);
+
+    function slot(it) {
+      var end = it.ended_epoch || (st.loop && st.loop.running && (st.loop.iteration === it.n && it.run === curRun) ? now : null);
       var d = secondsBetween(it.started_epoch, end);
       var cls = it.status === 'done' ? 'done' : it.status === 'blocked' ? 'blocked' : (it.ended ? '' : 'running');
-      var flex = (st.loop && st.loop.running && it.n === st.loop.iteration) ? 1.6 : Math.max(1, d ? d / 600 : 1);
-      var title = '第 ' + it.n + ' 轮 · ' + (it.story || '—') + '\n开始 ' + (it.started || '—') + '\n' +
+      var flex = (st.loop && st.loop.running && it.n === st.loop.iteration && it.run === curRun) ? 1.6 : Math.max(1, d ? d / 600 : 1);
+      var label = (runs > 1 ? '第 ' + it.n + ' 轮' : '第 ' + it.n + ' 轮');
+      var title = (runs > 1 ? '运行 ' + it.run + ' · ' : '') + '第 ' + it.n + ' 轮 · ' + (it.story || '—') + '\n开始 ' + (it.started || '—') + '\n' +
         (it.ended ? '结束 ' + it.ended + ' · 耗时 ' + dur(d) : '仍在进行 · 已 ' + dur(secondsBetween(it.started_epoch, now)));
       return '<div class="tl ' + cls + '" style="flex-grow:' + flex.toFixed(2) + '" data-story="' + esc(it.story || '') + '" title="' + esc(title) + '" role="button" tabindex="0">' +
-        '<span class="n">第 ' + it.n + ' 轮</span><span class="s">' + esc(it.story || '—') + '</span>' +
+        '<span class="n">' + label + '</span><span class="s">' + esc(it.story || '—') + '</span>' +
         '<span class="s">' + (it.ended ? dur(d) : '进行中') + '</span></div>';
-    }).join('');
+    }
+
+    if (runs <= 1) {
+      el.className = 'timeline';
+      el.innerHTML = its.map(slot).join('');
+      return;
+    }
+    // Several runs: iteration numbers restart at 1 each time, so group the slots per
+    // run instead of leaving two "第 1 轮" blocks looking like duplicates.
+    el.className = '';
+    var out = '', prev = null;
+    its.forEach(function (it) {
+      if (it.run !== prev) {
+        if (prev !== null) out += '</div></div>';
+        out += '<div class="tl-run-group"><div class="tl-run-head">运行 ' + it.run +
+               (it.run === curRun ? ' <span class="tl-cur">当前</span>' : '') + '</div>' +
+               '<div class="timeline">';
+        prev = it.run;
+      }
+      out += slot(it);
+    });
+    out += '</div></div>';
+    el.innerHTML = out;
   }
 
   /* ------------------------------------------------------- commits/patterns/archive */

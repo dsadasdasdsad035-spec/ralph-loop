@@ -24,6 +24,7 @@
     #ralph-inline-view .riv-lane .riv-slot.done { background: var(--green); }
     #ralph-inline-view .riv-lane .riv-slot.blocked { background: var(--yellow); }
     #ralph-inline-view .riv-lane .riv-slot.running { background: var(--blue); }
+    #ralph-inline-view .riv-lane .riv-run-edge { flex: none; width: 2px; align-self: stretch; background: var(--border); border-right: 1px solid var(--muted-foreground); }
     #ralph-inline-view .riv-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: middle; }
     #ralph-inline-view .riv-dot.done { background: var(--green); }
     #ralph-inline-view .riv-dot.running { background: var(--blue); }
@@ -203,6 +204,7 @@ __RALPH_STATE__
     document.getElementById('riv-iter').textContent = loop.iteration ? String(loop.iteration) : '—';
     var sub = [];
     if (loop.max_iterations) sub.push('最多 ' + loop.max_iterations);
+    if (loop.runs > 1) sub.push('第 ' + loop.run + ' 次运行');
     if (loop.running) sub.push('运行中');
     else if (loop.last_event_age_sec != null) sub.push('最近活动 ' + Math.round(loop.last_event_age_sec / 60) + ' 分钟前');
     document.getElementById('riv-iter-sub').textContent = sub.join(' · ');
@@ -216,19 +218,31 @@ __RALPH_STATE__
       lane.className = 'text-small text-muted';
       lane.textContent = '还没有迭代记录';
     } else {
-      laneHead.textContent = '迭代时间线 · 共 ' + its.length + ' 轮';
+      laneHead.textContent = '迭代时间线 · ' + (loop.runs > 1 ? loop.runs + ' 次运行 · ' : '') + '共 ' + its.length + ' 轮';
+      // an unbroken run of slots cannot show where one run ended and the next began,
+      // so mark the boundary with a divider when there has been more than one run
+      var multiRun = (loop.runs || 1) > 1;
+      var curRun = loop.run || 1;
       var maxSpan = 0;
       its.forEach(function (it) {
         var span = (it.ended_epoch || state.now_epoch) - (it.started_epoch || state.now_epoch);
         if (span > maxSpan) maxSpan = span;
       });
+      var prevRun = null;
       its.forEach(function (it) {
+        if (multiRun && prevRun !== null && it.run !== prevRun) {
+          var edge = document.createElement('div');
+          edge.className = 'riv-run-edge';
+          edge.setAttribute('data-tooltip', '运行 ' + prevRun + ' 结束，运行 ' + it.run + ' 开始');
+          lane.appendChild(edge);
+        }
+        prevRun = it.run;
         var span = (it.ended_epoch || state.now_epoch) - (it.started_epoch || state.now_epoch);
         var cls = it.status === 'done' ? 'done' : it.status === 'blocked' ? 'blocked' : (it.ended ? '' : 'running');
         var slot = document.createElement('div');
         slot.className = 'riv-slot ' + cls;
         slot.style.flexGrow = String(Math.max(1, Math.round((span / (maxSpan || 1)) * 10)));
-        slot.setAttribute('data-tooltip', '第 ' + it.n + ' 轮 · ' + (it.story || '—') + ' · ' +
+        slot.setAttribute('data-tooltip', (multiRun ? '运行 ' + it.run + ' · ' : '') + '第 ' + it.n + ' 轮 · ' + (it.story || '—') + ' · ' +
           (it.ended ? '已完成' : '进行中'));
         lane.appendChild(slot);
       });

@@ -343,6 +343,37 @@ def build_long_notes_fixture():
     return proj
 
 
+def multirun_case(pw, port):
+    """A project that was run twice: iteration numbers restart at 1, so the timeline
+    must show both runs instead of silently keeping only the later one."""
+    proj = FIX / "proj-multirun"
+    sh("bash", str(TESTS / "make-fixture.sh"), "multirun", str(proj))
+    srv = Server(str(proj), port)
+    page = pw.chromium.launch().new_page(viewport={"width": 1560, "height": 1100})
+    attach(page, "multirun")
+    page.goto(srv.url, wait_until="load")
+    page.wait_for_timeout(700)
+
+    # 6 iterations happened; a number-keyed timeline would collapse these to 4
+    check("多次运行: 时间线渲染 6 轮（不是被覆盖后的 4）", page.locator(".tl").count() == 6,
+          f"实际 {page.locator('.tl').count()}")
+    check("多次运行: 出现 2 个运行分组", page.locator(".tl-run-group").count() == 2,
+          f"实际 {page.locator('.tl-run-group').count()}")
+    check("多次运行: 第二次运行标注为当前", page.locator(".tl-run-head .tl-cur").count() == 1)
+    heads = page.locator(".tl-run-head").all_inner_texts()
+    check("多次运行: 两个运行分组都编号", all("运行" in h for h in heads), heads)
+    hint = page.inner_text("#timeline-hint")
+    check("多次运行: 标题点明次数与总轮数", "2 次运行" in hint and "6 轮" in hint, hint)
+    body = page.inner_text("body")
+    check("多次运行: 显示当前运行内轮次而非历史最大",
+          "第 4 轮" in body and "第 4 次运行" not in body, "")
+    check("多次运行: max 取当前运行（最多 100）", "最多 100" in body, "")
+
+    page.screenshot(path=str(SHOTS / "board-multirun.png"), full_page=True)
+    page.context.browser.close()
+    srv.stop()
+
+
 def main():
     build_fixtures()
     base = int(os.environ.get("RALPH_TEST_PORT", "7911"))
@@ -365,6 +396,7 @@ def main():
             "text": ["还没有 prd.json", "/ralph-run", "prd.json not found"], "selectors": {".empty": "any"},
         }, "board-empty.png")
         folds_case(pw, str(build_long_notes_fixture()), base + 4)
+        multirun_case(pw, base + 5)
         snapshot_and_fragment(pw)
 
     real = [e for e in console_errors if "favicon" not in e]

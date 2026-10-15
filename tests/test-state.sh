@@ -19,7 +19,7 @@ pass=0; fail=0
 chk() { if [[ "$2" == "$3" ]]; then echo "PASS  $1"; pass=$((pass+1)); else echo "FAIL  $1  (实际: $2 / 期望: $3)"; fail=$((fail+1)); fi; }
 run() { bash "$STATE" --dir "$1" --compact 2>/dev/null; }
 
-for s in running complete blocked; do bash "$TESTS_DIR/make-fixture.sh" "$s" >/dev/null; done
+for s in running complete blocked multirun; do bash "$TESTS_DIR/make-fixture.sh" "$s" >/dev/null; done
 
 echo "===== 正常状态 ====="
 chk "running：阶段=实现中（节点 5）" "$(run "$FIX/proj-running" | jq -r '"\(.loop.stage)/\(.loop.stage_node)"')" "implement/5"
@@ -35,6 +35,29 @@ chk "complete：迭代时间线 4 轮" "$(run "$FIX/proj-complete" | jq -r '.ite
 
 chk "blocked：阶段=已卡住" "$(run "$FIX/proj-blocked" | jq -r '.loop.stage')" "blocked"
 chk "blocked：两次尝试都在故事上" "$(run "$FIX/proj-blocked" | jq -r '.prd.stories[2].progress|length')" "2"
+
+echo
+echo "===== 多次运行（迭代号会重新从 1 开始）====="
+# A real project runs the loop more than once. Iteration numbers are then NOT unique
+# across the history, and a timeline keyed on the number alone silently overwrites
+# the earlier run's iterations.
+MR="$(run "$FIX/proj-multirun")"
+chk "多次运行：迭代条目 = 事件里的 start 数（6 条，不是被覆盖后的 4）" \
+  "$(printf '%s' "$MR" | jq -r '.iterations|length')" "6"
+chk "多次运行：识别出 2 次运行" "$(printf '%s' "$MR" | jq -r '.loop.runs')" "2"
+chk "多次运行：当前在第 2 次运行" "$(printf '%s' "$MR" | jq -r '.loop.run')" "2"
+chk "多次运行：当前轮次按运行内计数（第 4 轮，不是历史最大 4）" \
+  "$(printf '%s' "$MR" | jq -r '.loop.iteration')" "4"
+chk "多次运行：max 取当前运行（100，不是首次运行的 10）" \
+  "$(printf '%s' "$MR" | jq -r '.loop.max_iterations')" "100"
+chk "多次运行：两次运行各有独立的第 1 轮" \
+  "$(printf '%s' "$MR" | jq -r '[.iterations[]|select(.n==1)|.run]|sort|join(",")')" "1,2"
+chk "多次运行：运行边界由迭代号回退识别（无 preflight 也能分）" \
+  "$(printf '%s' "$MR" | jq -r '[.iterations[]|.run]|unique|length')" "2"
+chk "多次运行：逐条时间正序（运行1 全部早于 运行2）" \
+  "$(printf '%s' "$MR" | jq -r '([.iterations[]|select(.run==1)|.ended_epoch]|max) < ([.iterations[]|select(.run==2)|.started_epoch]|min)')" "true"
+chk "多次运行：start/end 各自配对（每轮都有结束时间）" \
+  "$(printf '%s' "$MR" | jq -r '[.iterations[]|select(.ended == null)]|length')" "1"
 
 echo
 echo "===== 降级输入 ====="

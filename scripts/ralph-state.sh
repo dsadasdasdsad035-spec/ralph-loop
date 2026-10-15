@@ -219,25 +219,47 @@ JQ_PROGRAM='
   | ( $ev | last ) as $last
   | ( $last != null and (($last.type // "") | IN("iteration_start", "agent_start")) ) as $running
   | ( if $last != null and ($last.epoch // null) != null then ($now - $last.epoch) else null end ) as $last_age
-  | ( [ $ev[] | (.iteration // 0) ] | max // 0 ) as $iter_max
-  | ( ([ $ev[] | (.max? // empty) ] | last) // null ) as $iter_cap
+  | ( ([ $ev[] | (.max? // empty) ] | last) // null ) as $cap_fallback
   | ( ( $ev | map(.driver? // empty) | last ) // "unknown" ) as $driver
-  | ( reduce $ev[] as $e ( {order: [], m: {}};
+  # Iteration numbers restart at 1 on every run, so they are NOT unique across the
+  # history of a project. Tag each event with its run first (a preflight opens one;
+  # with the in-session driver there is no preflight, so a number that fails to
+  # advance marks the boundary), then pair start/end within a run.
+  | ( reduce $ev[] as $e ( {run: 0, last_n: null, tag: []};
         ( $e.iteration // 0 ) as $n
-        | ( $n | tostring ) as $k
-        | if $n < 1 then .
+        | if $e.type == "preflight" then
+            .run += 1 | .last_n = null
           elif $e.type == "iteration_start" then
-            .m[$k] = ((.m[$k] // {n: $n})
-              + { story: ($e.story // null), started: ($e.ts // null), started_epoch: ($e.epoch // null) })
-            | if (.order | index($n)) == null then .order = (.order + [$n]) else . end
-          elif $e.type == "iteration_end" then
-            .m[$k] = ((.m[$k] // {n: $n})
-              + { story: ((.m[$k].story) // ($e.story // null)),
-                  ended: ($e.ts // null), ended_epoch: ($e.epoch // null), status: ($e.status // null) })
-            | if (.order | index($n)) == null then .order = (.order + [$n]) else . end
+            ( if .run == 0 then .run = 1
+              elif (.last_n != null and $n <= .last_n) then .run += 1
+              else . end )
+            | .last_n = $n
           else . end
-      ) ) as $acc
-  | ( [ $acc.order[] | $acc.m[(. | tostring)] ] ) as $iterations
+        | .tag += [ ($e + {run: .run}) ]
+      ) ) as $tagged
+  | ( reduce ( $tagged.tag[] | select(.run > 0) ) as $e ( [];
+        if $e.type == "iteration_start" then
+          . + [ { run: $e.run, n: ($e.iteration // 0), story: ($e.story // null),
+                  started: ($e.ts // null), started_epoch: ($e.epoch // null),
+                  ended: null, ended_epoch: null, status: null } ]
+        elif $e.type == "iteration_end" then
+          ( $e.run ) as $er
+          | ( $e.iteration // 0 ) as $en
+          | [ .[] | if (.run == $er and .n == $en and .ended == null)
+                  then . + { story: (.story // ($e.story // null)),
+                             ended: ($e.ts // null), ended_epoch: ($e.epoch // null),
+                             status: ($e.status // null) }
+                  else . end ]
+        else . end
+      ) ) as $iterations
+  | ( $iterations | last ) as $last_iter
+  | ( $iterations | map(.run) | unique | length ) as $run_count
+  # "第 N 轮" means N within the run the loop is on now, not a max across history.
+  | ( $last_iter.n // 0 ) as $cur_iter
+  | ( $last_iter.run // 0 ) as $cur_run
+  # The iteration cap belongs to the run it was passed to — every run can use a
+  # different --max-iterations, so a global "last max" would contradict the count.
+  | ( ([ $tagged.tag[] | select(.run == $cur_run) | (.max? // empty) ] | last) // $cap_fallback ) as $iter_cap
   | ( if $p == null then "no-prd"
       elif ($todo | length) == 0 then "done"
       elif $running then
@@ -279,7 +301,9 @@ JQ_PROGRAM='
       loop: {
         driver: $driver, running: $running,
         stale: ($running and $last_age != null and $last_age > 1800),
-        iteration: $iter_max, max_iterations: $iter_cap,
+        iteration: $cur_iter, run: $cur_run, runs: $run_count,
+        total_iterations: ($iterations | length),
+        max_iterations: $iter_cap,
         stage: $stage, stage_node: $stage_node, stage_label: $stage_label,
         story: $active_id, last_event: $last, last_event_age_sec: $last_age,
         source: ( if ($ev | length) > 0 then "events" else "inferred" end )

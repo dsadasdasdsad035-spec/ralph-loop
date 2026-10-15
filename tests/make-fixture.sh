@@ -38,6 +38,8 @@ GIT_AUTHOR_DATE="$(iso $((NOW - 7200)))" GIT_COMMITTER_DATE="$(iso $((NOW - 7200
 case "$STATE" in
   running|blocked) P1=true; P2=true; P3=false; P4=false ;;
   complete)        P1=true; P2=true; P3=true;  P4=true  ;;
+  # run 2 finished US-003 (after a retry) and is now on US-004
+  multirun)        P1=true; P2=true; P3=true;  P4=false ;;
   *) echo "unknown state: $STATE" >&2; exit 1 ;;
 esac
 
@@ -172,23 +174,45 @@ printf '%s\n' "ralph/task-priority" > .ralph/last-branch
 : > .ralph/iteration-3-prompt.md
 
 # events carry both an ISO ts (human) and epoch seconds (machine)
-ev() { # type iteration story status seconds_ago
-  local e=$((NOW - $5))
+ev() { # type iteration story status seconds_ago [max]
+  local e=$((NOW - $5)) cap="${6:-10}"
   jq -cn --arg t "$(iso $e)" --argjson ep "$e" --arg type "$1" --argjson it "$2" \
-         --arg s "$3" --arg st "$4" \
+         --arg s "$3" --arg st "$4" --argjson cap "$cap" \
     '{ts:$t, epoch:$ep, type:$type, iteration:$it,
       story:(if $s=="-" then null else $s end),
       status:(if $st=="-" then null else $st end),
-      max:10, driver:"in-session"}'
+      max:$cap, driver:"in-session"}'
 }
 
 {
-  ev preflight        0 -     -        5400
-  ev iteration_start  1 US-001 -        5300
-  ev iteration_end    1 US-001 done     4200
-  ev iteration_start  2 US-002 -        4100
-  ev iteration_end    2 US-002 done     1800
   case "$STATE" in
+    multirun)
+      # Two runs in one project, exactly like a real long-lived one: the first run
+      # stops against its own cap, the second restarts numbering at 1 with a
+      # different --max-iterations. Iteration numbers are therefore NOT unique.
+      ev preflight        0 -      -        9200
+      ev iteration_start  1 US-001 -        9100 10
+      ev iteration_end    1 US-001 done     8400
+      ev iteration_start  2 US-002 -        8300 10
+      ev iteration_end    2 US-002 done     7700
+      ev stopped          2 US-002 blocked  7650 10
+      ev iteration_start  1 US-002 -        7600 100
+      ev iteration_end    1 US-002 done     6000 100
+      ev iteration_start  2 US-003 -        5900 100
+      ev iteration_end    2 US-003 blocked  4200 100
+      ev iteration_start  3 US-003 -        4100 100
+      ev iteration_end    3 US-003 done     1200 100
+      ev iteration_start  4 US-004 -        1100 100 ;;
+    *)
+      ev preflight        0 -     -        5400
+      ev iteration_start  1 US-001 -        5300
+      ev iteration_end    1 US-001 done     4200
+      ev iteration_start  2 US-002 -        4100
+      ev iteration_end    2 US-002 done     1800
+      ;;
+  esac
+  case "$STATE" in
+    multirun) ;;
     complete)
       ev iteration_start 3 US-003 -      1700
       ev iteration_end   3 US-003 done    800
@@ -201,6 +225,9 @@ ev() { # type iteration story status seconds_ago
       ev iteration_start 4 US-003 -      800
       ev iteration_end   4 US-003 blocked 300
       ev stopped         4 US-003 blocked 295 ;;
+    running)
+      ev iteration_start 3 US-003 -      120 ;;
+    multirun) ;;
     *)
       ev iteration_start 3 US-003 -      120 ;;
   esac
